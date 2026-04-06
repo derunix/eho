@@ -18,6 +18,8 @@ output_*/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
 
 # IDE / OS files
 .idea/
@@ -28,3 +30,8 @@ Thumbs.db
 # Local env / logs
 .env
 *.log
+
+# Packaging artifacts
+build/
+dist/
+*.egg-info/
