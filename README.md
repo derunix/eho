@@ -145,16 +145,4 @@ python extract_dialogues.py --no-resume
 
 Для полного пересчёта используй `--no-resume`.
 
-## Тесты
 
-Проверка синтаксиса:
-
-```bash
-python -m py_compile extract_dialogues.py tests/test_llm_pipeline.py tests/test_knowledge_entities.py
-```
-
-Запуск тестов:
-
-```bash
-python -m unittest discover -s tests -v
-```
