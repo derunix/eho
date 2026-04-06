@@ -608,45 +608,48 @@ def next_llm_trace_id(log_prefix: str = "") -> str:
     return f"{timestamp}_{idx:06d}_{slug}"
 
 
-def get_llm_trace_dirs(config: Config) -> tuple[Path, Path]:
-    """Папки для request/response trace-файлов."""
+def get_llm_trace_dir(config: Config) -> Path:
+    """Папка для trace-файлов LLM."""
     global_paths = get_global_output_paths(config.output_dir)
-    requests_dir = global_paths["llm_requests_dir"]
-    responses_dir = global_paths["llm_responses_dir"]
+    trace_dir = global_paths["llm_traces_dir"]
     if config.llm_trace_run_id:
-        requests_dir = requests_dir / config.llm_trace_run_id
-        responses_dir = responses_dir / config.llm_trace_run_id
-    return requests_dir, responses_dir
+        trace_dir = trace_dir / config.llm_trace_run_id
+    return trace_dir
 
 
-def save_llm_request_trace(
+def init_llm_trace(
     config: Config,
     trace_id: str,
     payload: dict,
-) -> Optional[Path]:
-    """Сохраняет request одного логического LLM-вызова."""
+) -> tuple[Optional[Path], dict]:
+    """Создаёт trace одного логического LLM-вызова и пишет initial request."""
     if not config.llm_trace_enabled:
-        return None
-    requests_dir, _ = get_llm_trace_dirs(config)
-    requests_dir.mkdir(parents=True, exist_ok=True)
-    path = requests_dir / f"{trace_id}.json"
-    write_json_atomic(path, make_json_safe(payload))
-    return path
+        return None, {}
+    trace_dir = get_llm_trace_dir(config)
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    path = trace_dir / f"{trace_id}.json"
+    trace = {
+        "trace_id": trace_id,
+        "created_at": now_iso_str(),
+        "updated_at": now_iso_str(),
+        **make_json_safe(payload),
+        "attempts": [],
+    }
+    write_json_atomic(path, trace)
+    return path, trace
 
 
-def save_llm_response_trace(
-    config: Config,
-    trace_id: str,
-    attempt: int,
+def append_llm_trace_attempt(
+    path: Optional[Path],
+    trace: dict,
     payload: dict,
 ) -> Optional[Path]:
-    """Сохраняет response/ошибку одной попытки LLM-вызова."""
-    if not config.llm_trace_enabled:
+    """Добавляет в trace результат одной попытки LLM-вызова."""
+    if path is None:
         return None
-    _, responses_dir = get_llm_trace_dirs(config)
-    responses_dir.mkdir(parents=True, exist_ok=True)
-    path = responses_dir / f"{trace_id}__attempt_{attempt:02d}.json"
-    write_json_atomic(path, make_json_safe(payload))
+    trace.setdefault("attempts", []).append(make_json_safe(payload))
+    trace["updated_at"] = now_iso_str()
+    write_json_atomic(path, trace)
     return path
 
 
@@ -935,8 +938,7 @@ def get_global_output_paths(output_dir: str) -> dict[str, Path]:
         "timeline_graph_txt": base / "timeline_graph.txt",
         "metadata": base / "metadata.json",
         "metadata_history": base / "metadata_history.jsonl",
-        "llm_requests_dir": base / "llm_requests",
-        "llm_responses_dir": base / "llm_responses",
+        "llm_traces_dir": base / "llm_traces",
     }
 
 
@@ -1966,7 +1968,7 @@ def call_llm_ollama_native(
         payload_data["format"] = response_format
 
     trace_id = trace_id or next_llm_trace_id(log_prefix)
-    save_llm_request_trace(
+    trace_path, trace_state = init_llm_trace(
         config,
         trace_id,
         {
@@ -2009,10 +2011,9 @@ def call_llm_ollama_native(
                 if content and "<think>" in content:
                     content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
                 elapsed = time.time() - t0
-                save_llm_response_trace(
-                    config,
-                    trace_id,
-                    attempt + 1,
+                append_llm_trace_attempt(
+                    trace_path,
+                    trace_state,
                     {
                         "trace_id": trace_id,
                         "ts": now_iso_str(),
@@ -2047,10 +2048,9 @@ def call_llm_ollama_native(
             if stop_requested():
                 return None
             elapsed = time.time() - t0
-            save_llm_response_trace(
-                config,
-                trace_id,
-                attempt + 1,
+            append_llm_trace_attempt(
+                trace_path,
+                trace_state,
                 {
                     "trace_id": trace_id,
                     "ts": now_iso_str(),
@@ -2103,7 +2103,7 @@ def call_llm_openai(
     }
     if response_format is not None:
         request_kwargs["response_format"] = response_format
-    save_llm_request_trace(
+    trace_path, trace_state = init_llm_trace(
         config,
         trace_id,
         {
@@ -2139,10 +2139,9 @@ def call_llm_openai(
                 content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
             elapsed = time.time() - t0
             usage = getattr(response, "usage", None)
-            save_llm_response_trace(
-                config,
-                trace_id,
-                attempt + 1,
+            append_llm_trace_attempt(
+                trace_path,
+                trace_state,
                 {
                     "trace_id": trace_id,
                     "ts": now_iso_str(),
@@ -2176,10 +2175,9 @@ def call_llm_openai(
             if stop_requested():
                 return None
             elapsed = time.time() - t0
-            save_llm_response_trace(
-                config,
-                trace_id,
-                attempt + 1,
+            append_llm_trace_attempt(
+                trace_path,
+                trace_state,
                 {
                     "trace_id": trace_id,
                     "ts": now_iso_str(),

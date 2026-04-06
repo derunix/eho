@@ -82,7 +82,7 @@ class LLMExtractionPipelineSmokeTest(unittest.TestCase):
             self.assertEqual(history_lines[1]["type"], "chunk_complete")
             self.assertEqual(history_lines[1]["current_book"], "1. Чужак.fb2")
 
-    def test_call_llm_openai_saves_requests_and_responses(self):
+    def test_call_llm_openai_saves_request_and_response_in_one_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = ed.Config(output_dir=tmpdir)
             config.llm_trace_run_id = "test_run"
@@ -118,20 +118,19 @@ class LLMExtractionPipelineSmokeTest(unittest.TestCase):
 
             self.assertEqual(content, "РџСЂРѕРІРµСЂРѕС‡РЅС‹Р№ РѕС‚РІРµС‚")
 
-            request_path = Path(tmpdir) / "llm_requests" / "test_run" / "trace_test.json"
-            response_path = Path(tmpdir) / "llm_responses" / "test_run" / "trace_test__attempt_01.json"
+            trace_path = Path(tmpdir) / "llm_traces" / "test_run" / "trace_test.json"
 
-            self.assertTrue(request_path.exists())
-            self.assertTrue(response_path.exists())
+            self.assertTrue(trace_path.exists())
 
-            request_payload = json.loads(request_path.read_text(encoding="utf-8"))
-            response_payload = json.loads(response_path.read_text(encoding="utf-8"))
+            trace_payload = json.loads(trace_path.read_text(encoding="utf-8"))
+            response_payload = trace_payload["attempts"][0]
 
-            self.assertEqual(request_payload["provider"], "openai_compatible")
-            self.assertEqual(request_payload["request_payload"]["messages"][0]["content"], "system prompt")
-            self.assertEqual(request_payload["request_payload"]["messages"][1]["content"], "user prompt")
-            self.assertEqual(request_payload["max_tokens"], 123)
-            self.assertEqual(request_payload["temperature"], 0.55)
+            self.assertEqual(trace_payload["provider"], "openai_compatible")
+            self.assertEqual(trace_payload["request_payload"]["messages"][0]["content"], "system prompt")
+            self.assertEqual(trace_payload["request_payload"]["messages"][1]["content"], "user prompt")
+            self.assertEqual(trace_payload["max_tokens"], 123)
+            self.assertEqual(trace_payload["temperature"], 0.55)
+            self.assertEqual(len(trace_payload["attempts"]), 1)
 
             self.assertEqual(response_payload["provider"], "openai_compatible")
             self.assertEqual(response_payload["status"], "ok")
