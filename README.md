@@ -78,16 +78,4 @@ python extract_dialogues.py --workers 2 --voice-extractor regex --chunk-size 250
 
 Полностью обработанные книги будут автоматически пропускаться. Для полного пересчёта используй `--no-resume`.
 
-## Публикация на GitHub
-
-Репозиторий уже можно публиковать: локальные книги, окружение и результаты исключены через `.gitignore`.
-
-Базовый сценарий:
-
-```bash
-git add .
-git commit -m "Initial commit"
-git remote add origin https://github.com/<your-name>/<repo-name>.git
-git push -u origin main
-```
 
