@@ -400,6 +400,99 @@ class KnowledgeEntityResolutionTest(unittest.TestCase):
         self.assertIn('Не используй `custom` для разовых сценических деталей', ed.COMBINED_PROMPT)
         self.assertIn('ведьмочки', ed.COMBINED_PROMPT)
 
+    def test_prompts_reference_scene_glossary_and_time_scope(self):
+        self.assertIn('SCENE GLOSSARY', ed.EXTRACT_PROMPT)
+        self.assertIn('"time_scope"', ed.KNOWLEDGE_PROMPT)
+        self.assertIn('"time_scope"', ed.COMBINED_PROMPT)
+        self.assertIn('time_scope:', ed.KNOWLEDGE_LINK_PROMPT)
+
+    def test_build_scene_glossary_collects_known_entities(self):
+        glossary = ed.build_scene_glossary(
+            "Джуффин встретил Макса у Дома у Моста. "
+            "Потом они пили камру на улице Желтых Камней."
+        )
+
+        self.assertIn("- character: Джуффин Халли", glossary)
+        self.assertIn("- place: Дом у Моста", glossary)
+        self.assertIn("- custom: камра", glossary)
+        self.assertIn("- place: улица Желтых Камней", glossary)
+
+    def test_validate_knowledge_infers_time_scope(self):
+        validated = ed.validate_knowledge([
+            {
+                "category": "history",
+                "subject": "Кодекс Хрембера",
+                "fact": "Кодекс Хрембера больше не действует и магию не ограничивает.",
+            },
+            {
+                "category": "custom",
+                "subject": "камра",
+                "fact": "Камру пьют почти все жители Ехо.",
+            },
+        ])
+
+        self.assertEqual(validated[0]["time_scope"], "ended")
+        self.assertEqual(validated[1]["time_scope"], "timeless")
+
+
+    def test_contradicting_or_time_shifted_facts_are_not_treated_as_duplicates(self):
+        self.assertFalse(
+            ed.facts_look_duplicate(
+                "Кодекс Хрембера действует и ограничивает магию.",
+                "Кодекс Хрембера больше не действует и магию не ограничивает.",
+            )
+        )
+        self.assertFalse(
+            ed.facts_look_duplicate(
+                "Теххи жива и находится рядом с Максом.",
+                "Теххи мертва и стала призраком.",
+            )
+        )
+
+    def test_deduplicate_knowledge_keeps_conflicting_world_states(self):
+        facts = [
+            {
+                "category": "history",
+                "subject": "Кодекс Хрембера",
+                "fact": "Кодекс Хрембера действует и ограничивает магию.",
+            },
+            {
+                "category": "history",
+                "subject": "Кодекс Хрембера",
+                "fact": "Кодекс Хрембера больше не действует и магию не ограничивает.",
+            },
+            {
+                "category": "history",
+                "subject": "Кодекс Хрембера",
+                "fact": "Кодекс Хрембера больше не действует и магию не ограничивает.",
+            },
+        ]
+
+        unique = ed.deduplicate_knowledge(facts)
+        self.assertEqual(len(unique), 2)
+        unique_facts = [item["fact"] for item in unique]
+        self.assertIn("Кодекс Хрембера действует и ограничивает магию.", unique_facts)
+        self.assertIn("Кодекс Хрембера больше не действует и магию не ограничивает.", unique_facts)
+
+    def test_deduplicate_knowledge_keeps_same_fact_with_different_time_scope(self):
+        facts = [
+            {
+                "category": "history",
+                "subject": "Кодекс Хрембера",
+                "fact": "Кодекс Хрембера ограничивает магию.",
+                "time_scope": "past",
+            },
+            {
+                "category": "history",
+                "subject": "Кодекс Хрембера",
+                "fact": "Кодекс Хрембера ограничивает магию.",
+                "time_scope": "current",
+            },
+        ]
+
+        unique = ed.deduplicate_knowledge(facts)
+        self.assertEqual(len(unique), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
