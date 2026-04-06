@@ -154,6 +154,14 @@ class Config:
     knowledge_link_top_k: int = 8
     knowledge_link_min_score: float = 6.0
     max_tokens_knowledge_link: int = 220
+    timeline_resolution_enabled: bool = True
+    timeline_neighbor_chunks: int = 1
+    timeline_group_max_facts: int = 36
+    timeline_group_max_chunks: int = 6
+    timeline_chunk_excerpt_tokens: int = 260
+    max_tokens_timeline_resolution: int = 1400
+    llm_trace_enabled: bool = True
+    llm_trace_run_id: str = ""
 
     # System prompt персонажа (будет в каждом примере датасета)
     # Таймлайн: конец цикла «Сновидения Ехо» (после «Так берегись»)
@@ -536,6 +544,183 @@ def read_jsonl(path: Path, log_prefix: str = "") -> list[dict]:
     return items
 
 
+_METADATA_RECENT_EVENTS_LIMIT = 80
+_LLM_TRACE_LOCK = threading.Lock()
+_LLM_TRACE_COUNTER = 0
+
+
+def now_iso_str() -> str:
+    """Текущее локальное время в ISO-формате."""
+    from datetime import datetime
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def write_json_atomic(path: Path, payload: Any):
+    """Атомарно пишет JSON на диск, чтобы metadata не портилась при остановке."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    tmp_path.replace(path)
+
+
+def make_json_safe(value: Any) -> Any:
+    """Преобразует произвольный объект в JSON-safe структуру."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {
+            str(key): make_json_safe(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [make_json_safe(item) for item in value]
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            return make_json_safe(model_dump())
+        except Exception:
+            pass
+    value_dict = getattr(value, "__dict__", None)
+    if isinstance(value_dict, dict):
+        return make_json_safe(value_dict)
+    return repr(value)
+
+
+def make_trace_slug(text: str, default: str = "llm") -> str:
+    """Делает безопасный короткий slug для имён trace-файлов."""
+    slug = re.sub(r"[^0-9A-Za-zА-Яа-яЁё._-]+", "_", text or "").strip("._-")
+    if not slug:
+        slug = default
+    return slug[:80]
+
+
+def next_llm_trace_id(log_prefix: str = "") -> str:
+    """Возвращает уникальный id для одного логического LLM-вызова."""
+    global _LLM_TRACE_COUNTER
+    with _LLM_TRACE_LOCK:
+        _LLM_TRACE_COUNTER += 1
+        idx = _LLM_TRACE_COUNTER
+    timestamp = time.strftime("%Y%m%dT%H%M%S", time.localtime())
+    slug = make_trace_slug(log_prefix, default="llm")
+    return f"{timestamp}_{idx:06d}_{slug}"
+
+
+def get_llm_trace_dirs(config: Config) -> tuple[Path, Path]:
+    """Папки для request/response trace-файлов."""
+    global_paths = get_global_output_paths(config.output_dir)
+    requests_dir = global_paths["llm_requests_dir"]
+    responses_dir = global_paths["llm_responses_dir"]
+    if config.llm_trace_run_id:
+        requests_dir = requests_dir / config.llm_trace_run_id
+        responses_dir = responses_dir / config.llm_trace_run_id
+    return requests_dir, responses_dir
+
+
+def save_llm_request_trace(
+    config: Config,
+    trace_id: str,
+    payload: dict,
+) -> Optional[Path]:
+    """Сохраняет request одного логического LLM-вызова."""
+    if not config.llm_trace_enabled:
+        return None
+    requests_dir, _ = get_llm_trace_dirs(config)
+    requests_dir.mkdir(parents=True, exist_ok=True)
+    path = requests_dir / f"{trace_id}.json"
+    write_json_atomic(path, make_json_safe(payload))
+    return path
+
+
+def save_llm_response_trace(
+    config: Config,
+    trace_id: str,
+    attempt: int,
+    payload: dict,
+) -> Optional[Path]:
+    """Сохраняет response/ошибку одной попытки LLM-вызова."""
+    if not config.llm_trace_enabled:
+        return None
+    _, responses_dir = get_llm_trace_dirs(config)
+    responses_dir.mkdir(parents=True, exist_ok=True)
+    path = responses_dir / f"{trace_id}__attempt_{attempt:02d}.json"
+    write_json_atomic(path, make_json_safe(payload))
+    return path
+
+
+def merge_metadata_updates(target: dict, updates: dict):
+    """Рекурсивно мержит metadata-обновления."""
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            merge_metadata_updates(target[key], value)
+        else:
+            target[key] = value
+
+
+def compact_metadata_event_details(data: dict) -> dict:
+    """Оставляет в истории metadata только компактные JSON-safe детали."""
+    compact: dict[str, Any] = {}
+    for key, value in data.items():
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            compact[key] = value
+        elif isinstance(value, dict):
+            nested = {
+                nested_key: nested_value
+                for nested_key, nested_value in value.items()
+                if isinstance(nested_value, (str, int, float, bool)) or nested_value is None
+            }
+            if nested:
+                compact[key] = nested
+    return compact
+
+
+def update_metadata_snapshot(
+    state: dict,
+    path: Path,
+    history_path: Optional[Path] = None,
+    *,
+    event_type: str = "",
+    message: str = "",
+    **updates,
+) -> dict:
+    """Обновляет metadata runtime-state и сразу пишет его на диск."""
+    if updates:
+        merge_metadata_updates(state, updates)
+
+    timestamp = now_iso_str()
+    state["updated_at"] = timestamp
+    state.setdefault("event_count", 0)
+
+    if event_type:
+        state["event_count"] += 1
+        event = {
+            "idx": state["event_count"],
+            "ts": timestamp,
+            "type": event_type,
+            "status": state.get("status"),
+            "current_stage": state.get("current_stage"),
+            "current_book": state.get("current_book"),
+        }
+        if message:
+            event["message"] = message
+        details = compact_metadata_event_details(updates)
+        if details:
+            event["details"] = details
+
+        recent_events = state.setdefault("recent_events", [])
+        recent_events.append(event)
+        if len(recent_events) > _METADATA_RECENT_EVENTS_LIMIT:
+            del recent_events[:-_METADATA_RECENT_EVENTS_LIMIT]
+        state["last_event"] = event
+        if history_path is not None:
+            append_jsonl(history_path, [event])
+
+    write_json_atomic(path, state)
+    return state
+
+
 def parse_fb2(fb2_content: bytes) -> str:
     """
     Парсит FB2 XML и извлекает чистый текст из <body>.
@@ -745,7 +930,13 @@ def get_global_output_paths(output_dir: str) -> dict[str, Path]:
         "knowledge_raw_txt": base / "knowledge_base_raw.txt",
         "knowledge": base / "knowledge_base.json",
         "knowledge_txt": base / "knowledge_base.txt",
+        "timeline_raw": base / "timeline_resolution_raw.json",
+        "timeline_graph": base / "timeline_graph.json",
+        "timeline_graph_txt": base / "timeline_graph.txt",
         "metadata": base / "metadata.json",
+        "metadata_history": base / "metadata_history.jsonl",
+        "llm_requests_dir": base / "llm_requests",
+        "llm_responses_dir": base / "llm_responses",
     }
 
 
@@ -774,14 +965,83 @@ def load_book_knowledge_for_global_base(
     return items
 
 
+def load_book_chunk_records(
+    output_dir: str,
+    book_name: str,
+    log_prefix: str = "",
+) -> list[dict]:
+    """Загружает сохранённые chunk-records книги для timeline resolution."""
+    paths = get_book_output_paths(output_dir, book_name)
+    records: list[dict] = []
+
+    for record in read_jsonl(paths["chunks"], log_prefix=log_prefix):
+        idx = record.get("idx")
+        if not isinstance(idx, int):
+            continue
+        chunk_text = record.get("chunk_text", "")
+        if not isinstance(chunk_text, str):
+            chunk_text = ""
+        records.append({
+            "idx": idx,
+            "chapter": strip_text(record.get("chapter", "")),
+            "chunk_text": chunk_text,
+            "knowledge": [item for item in record.get("knowledge", []) if isinstance(item, dict)],
+        })
+
+    records.sort(key=lambda item: item["idx"])
+    return records
+
+
+def write_global_knowledge_snapshot(
+    output_dir: str,
+    raw_knowledge: list[dict],
+    narrator: str = "Макс",
+    log_prefix: str = "",
+    progress_callback: Optional[Any] = None,
+    *,
+    completion_event_type: str = "global_kb_complete",
+) -> tuple[list[dict], list[dict]]:
+    """Пишет текущий snapshot общей базы знаний в JSON и человекочитаемом виде."""
+    global_paths = get_global_output_paths(output_dir)
+    normalized_raw = [item for item in raw_knowledge if isinstance(item, dict)]
+
+    with open(global_paths["knowledge_raw"], "w", encoding="utf-8") as f:
+        json.dump(normalized_raw, f, ensure_ascii=False, indent=2)
+    save_readable_knowledge(normalized_raw, str(global_paths["knowledge_raw_txt"]))
+    if progress_callback is not None:
+        progress_callback(
+            "global_kb_raw_written",
+            raw_knowledge_facts=len(normalized_raw),
+        )
+
+    canonicalized_knowledge = canonicalize_global_knowledge(
+        normalized_raw,
+        narrator=narrator,
+        log_prefix=f"{log_prefix}[canonicalize]" if log_prefix else "",
+    )
+    unique_knowledge = deduplicate_knowledge(canonicalized_knowledge)
+
+    with open(global_paths["knowledge"], "w", encoding="utf-8") as f:
+        json.dump(unique_knowledge, f, ensure_ascii=False, indent=2)
+    save_readable_knowledge(unique_knowledge, str(global_paths["knowledge_txt"]))
+    if progress_callback is not None:
+        progress_callback(
+            completion_event_type,
+            raw_knowledge_facts=len(normalized_raw),
+            knowledge_facts=len(unique_knowledge),
+        )
+
+    return normalized_raw, unique_knowledge
+
+
 def build_global_knowledge_base(
     output_dir: str,
     book_names: list[str],
     narrator: str = "Макс",
     log_prefix: str = "",
+    progress_callback: Optional[Any] = None,
 ) -> tuple[list[dict], list[dict]]:
     """Собирает общую базу знаний из per-book файлов и отдельно её дедуплицирует."""
-    global_paths = get_global_output_paths(output_dir)
     raw_knowledge: list[dict] = []
     loaded_books = 0
 
@@ -793,23 +1053,32 @@ def build_global_knowledge_base(
         )
         if not book_items:
             continue
+        book_items = ensure_knowledge_source_defaults(book_items, book_name)
         loaded_books += 1
         raw_knowledge.extend(book_items)
+        if progress_callback is not None:
+            progress_callback(
+                "global_kb_book_loaded",
+                book_name=book_name,
+                loaded_books=loaded_books,
+                raw_knowledge_facts=len(raw_knowledge),
+            )
 
-    with open(global_paths["knowledge_raw"], "w", encoding="utf-8") as f:
-        json.dump(raw_knowledge, f, ensure_ascii=False, indent=2)
-    save_readable_knowledge(raw_knowledge, str(global_paths["knowledge_raw_txt"]))
-
-    canonicalized_knowledge = canonicalize_global_knowledge(
+    raw_knowledge, unique_knowledge = write_global_knowledge_snapshot(
+        output_dir,
         raw_knowledge,
         narrator=narrator,
-        log_prefix=f"{log_prefix}[canonicalize]" if log_prefix else "",
+        log_prefix=log_prefix,
+        progress_callback=(
+            None if progress_callback is None else
+            lambda event_type, **event_data: progress_callback(
+                event_type,
+                loaded_books=loaded_books,
+                **event_data,
+            )
+        ),
+        completion_event_type="global_kb_complete",
     )
-    unique_knowledge = deduplicate_knowledge(canonicalized_knowledge)
-
-    with open(global_paths["knowledge"], "w", encoding="utf-8") as f:
-        json.dump(unique_knowledge, f, ensure_ascii=False, indent=2)
-    save_readable_knowledge(unique_knowledge, str(global_paths["knowledge_txt"]))
 
     if log_prefix:
         log_event(
@@ -818,6 +1087,708 @@ def build_global_knowledge_base(
         )
 
     return raw_knowledge, unique_knowledge
+
+
+TIMELINE_RESOLUTION_SYSTEM = """Ты — помощник по timeline resolution и построению графа знаний по книгам Макса Фрая.
+Получаешь факты одной книги/главы и соответствующие текстовые фрагменты.
+Твоя задача — собрать локальный граф событий, персонажей, мест, предметов, магии и связей между ними.
+Отвечай СТРОГО в формате JSON. Никакого текста до или после JSON."""
+
+TIMELINE_RESOLUTION_PROMPT = """У тебя есть факты одной книги/главы и исходные текстовые фрагменты.
+
+КНИГА: {book_name}
+ГЛАВА: {chapter}
+
+ФАКТЫ:
+{facts_block}
+
+ТЕКСТОВЫЕ ФРАГМЕНТЫ:
+{chunks_block}
+
+Построй ЛОКАЛЬНЫЙ граф для этого фрагмента книги.
+
+Верни JSON объект:
+{{
+  "entities": [
+    {{
+      "label": "каноничное имя сущности",
+      "type": "character|place|item|magic|creature|history_subject|organization|unknown"
+    }}
+  ],
+  "events": [
+    {{
+      "local_id": "E1",
+      "label": "краткое название события",
+      "summary": "что произошло и почему это важно",
+      "time_scope": "past|current|change|ended|timeless|unclear",
+      "chunk_indices": [0, 1],
+      "participants": ["Макс", "Джуффин Халли"],
+      "places": ["Дом у Моста"],
+      "objects": ["камра", "Смертный Шар"]
+    }}
+  ],
+  "relations": [
+    {{
+      "source": "E1 или точный label сущности",
+      "target": "E2 или точный label сущности",
+      "type": "before|after|involves|occurs_in|uses|affects|changes_state_of|belongs_to|located_in|related_to",
+      "evidence": "краткая опора на факт или текст",
+      "confidence": "explicit|inferred"
+    }}
+  ]
+}}
+
+ПРАВИЛА:
+— Используй только факты и текстовые фрагменты, которые даны выше.
+— Не придумывай новых сущностей, если их нельзя уверенно назвать.
+— Сохраняй разные состояния мира и персонажей как РАЗНЫЕ события/связи, если состояние явно меняется.
+— Если порядок событий неясен, не создавай before/after.
+— В отношениях используй точные labels из facts/entities. Для событий используй local_id.
+— В entities перечисляй только полезные сущности, которые реально участвуют в связях или событиях.
+— Если событий не видно, entities и relations всё равно можно вернуть.
+
+JSON:"""
+
+_TIMELINE_RELATION_TYPES = {
+    "before",
+    "after",
+    "involves",
+    "occurs_in",
+    "uses",
+    "affects",
+    "changes_state_of",
+    "belongs_to",
+    "located_in",
+    "related_to",
+}
+
+
+def timeline_entity_type_for_category(category: str) -> str:
+    """Нормализует тип сущности для графа."""
+    category = strip_text(category)
+    mapping = {
+        "character": "character",
+        "place": "place",
+        "custom": "item",
+        "magic": "magic",
+        "creature": "creature",
+        "history": "history_subject",
+        "event": "event_subject",
+    }
+    return mapping.get(category, "unknown")
+
+
+def timeline_entity_node_id(label: str, category: str = "") -> str:
+    """Детерминированный id сущности графа."""
+    node_type = timeline_entity_type_for_category(category)
+    normalized = normalize_subject_for_dedup(label) or text_hash(label)
+    return f"{node_type}::{normalized}"
+
+
+def timeline_event_node_id(book_name: str, chapter: str, order: int) -> str:
+    """Детерминированный id события графа."""
+    return f"event::{get_book_stem(book_name)}::{text_hash(chapter)}::{order:03d}"
+
+
+def timeline_chunk_excerpt(text: str, token_limit: int) -> str:
+    """Компактный excerpt чанка для timeline prompt."""
+    if not text:
+        return ""
+    if estimate_tokens(text) <= token_limit:
+        return text.strip()
+
+    approx_chars = max(token_limit * 4, 600)
+    head = text[:approx_chars].rstrip()
+    tail = text[-approx_chars:].lstrip()
+    return f"{head}\n...\n{tail}".strip()
+
+
+def format_timeline_facts_for_prompt(facts: list[dict], limit: int = 36) -> str:
+    """Форматирует факты одной главы для timeline resolution."""
+    lines = []
+    sorted_facts = sorted(
+        facts,
+        key=lambda item: (
+            item.get("chunk_idx") if isinstance(item.get("chunk_idx"), int) else 10 ** 9,
+            strip_text(item.get("subject", "")),
+            strip_text(item.get("fact", "")),
+        ),
+    )
+    for item in sorted_facts[:limit]:
+        chunk_idx = item.get("chunk_idx")
+        chunk_note = f"chunk_idx={chunk_idx}" if isinstance(chunk_idx, int) else "chunk_idx=?"
+        category = strip_text(item.get("category", "unknown"))
+        subject = strip_text(item.get("subject", ""))
+        fact = strip_text(item.get("fact", ""))
+        time_scope = normalize_time_scope(
+            item.get("time_scope", ""),
+            fact=fact,
+            category=category,
+        )
+        chapter = strip_text(item.get("chapter", ""))
+        lines.append(
+            f"- [{chunk_note}] {category} / {subject} [{time_scope}]"
+            + (f" / chapter={chapter}" if chapter else "")
+            + f": {fact}"
+        )
+    if len(sorted_facts) > limit:
+        lines.append(f"- ... ещё {len(sorted_facts) - limit} фактов")
+    return "\n".join(lines) if lines else "(нет фактов)"
+
+
+def format_timeline_chunks_for_prompt(chunk_records: list[dict], token_limit: int) -> str:
+    """Форматирует текстовые chunk-фрагменты для timeline resolution."""
+    blocks = []
+    for record in chunk_records:
+        chunk_idx = record.get("idx")
+        chapter = strip_text(record.get("chapter", ""))
+        excerpt = timeline_chunk_excerpt(record.get("chunk_text", ""), token_limit)
+        if not excerpt:
+            continue
+        blocks.append(
+            f"[CHUNK idx={chunk_idx}"
+            + (f" | chapter={chapter}" if chapter else "")
+            + f"]\n{excerpt}"
+        )
+    return "\n\n".join(blocks) if blocks else "(нет текстовых фрагментов)"
+
+
+def timeline_group_sort_key(group: dict) -> tuple:
+    """Ключ сортировки групп timeline."""
+    first_chunk = min(group.get("chunk_indices") or [10 ** 9])
+    return (group.get("book_name", ""), first_chunk, group.get("chapter", ""))
+
+
+def build_timeline_groups(
+    output_dir: str,
+    raw_knowledge: list[dict],
+    book_names: list[str],
+    config: Config,
+) -> list[dict]:
+    """Группирует факты для offline timeline resolution по книге и главе."""
+    chunk_records_by_book = {
+        book_name: load_book_chunk_records(output_dir, book_name)
+        for book_name in book_names
+    }
+
+    groups: dict[tuple[str, str], dict] = {}
+    for item in raw_knowledge:
+        book_name = strip_text(item.get("source_book", ""))
+        if not book_name:
+            continue
+        chapter = strip_text(item.get("chapter", "")) or default_chapter_label(book_name)
+        key = (book_name, chapter)
+        group = groups.setdefault(key, {
+            "book_name": book_name,
+            "chapter": chapter,
+            "facts": [],
+            "chunk_indices": set(),
+        })
+        group["facts"].append(item)
+        chunk_idx = item.get("chunk_idx")
+        if isinstance(chunk_idx, int):
+            group["chunk_indices"].add(chunk_idx)
+
+    prepared_groups = []
+    for key, group in groups.items():
+        book_name = group["book_name"]
+        records_by_idx = {
+            record["idx"]: record
+            for record in chunk_records_by_book.get(book_name, [])
+            if isinstance(record.get("idx"), int)
+        }
+        expanded_indices = set(group["chunk_indices"])
+        for idx in list(group["chunk_indices"]):
+            for delta in range(1, max(config.timeline_neighbor_chunks, 0) + 1):
+                expanded_indices.add(idx - delta)
+                expanded_indices.add(idx + delta)
+
+        chunk_records = [
+            records_by_idx[idx]
+            for idx in sorted(expanded_indices)
+            if idx in records_by_idx
+        ][:max(config.timeline_group_max_chunks, 1)]
+
+        prepared_groups.append({
+            "book_name": book_name,
+            "chapter": group["chapter"],
+            "facts": sorted(
+                group["facts"],
+                key=lambda item: (
+                    item.get("chunk_idx") if isinstance(item.get("chunk_idx"), int) else 10 ** 9,
+                    strip_text(item.get("subject", "")),
+                ),
+            ),
+            "chunk_indices": sorted(group["chunk_indices"]),
+            "chunk_records": chunk_records,
+        })
+
+    prepared_groups.sort(key=timeline_group_sort_key)
+    return prepared_groups
+
+
+def build_fallback_timeline_events(facts: list[dict]) -> list[dict]:
+    """Создаёт грубые event-узлы из фактов, если LLM timeline resolution не сработал."""
+    events = []
+    for idx, item in enumerate(facts, 1):
+        category = strip_text(item.get("category", ""))
+        fact = strip_text(item.get("fact", ""))
+        if not fact:
+            continue
+        time_scope = normalize_time_scope(item.get("time_scope", ""), fact=fact, category=category)
+        if category not in {"event", "history"} and time_scope not in {"past", "current", "change", "ended"}:
+            continue
+        subject = strip_text(item.get("subject", ""))
+        chunk_idx = item.get("chunk_idx")
+        events.append({
+            "local_id": f"E{idx}",
+            "label": preview_text(fact, 72),
+            "summary": fact,
+            "time_scope": time_scope,
+            "chunk_indices": [chunk_idx] if isinstance(chunk_idx, int) else [],
+            "participants": [subject] if subject else [],
+            "places": [],
+            "objects": [],
+        })
+    return events[:12]
+
+
+def normalize_timeline_relation_type(value: str) -> str:
+    """Нормализует тип relation для графа timeline."""
+    normalized = normalize_dedup_text(value)
+    aliases = {
+        "before": "before",
+        "after": "after",
+        "involves": "involves",
+        "occurs in": "occurs_in",
+        "occurs_in": "occurs_in",
+        "uses": "uses",
+        "affects": "affects",
+        "changes state of": "changes_state_of",
+        "changes_state_of": "changes_state_of",
+        "belongs to": "belongs_to",
+        "belongs_to": "belongs_to",
+        "located in": "located_in",
+        "located_in": "located_in",
+        "related to": "related_to",
+        "related_to": "related_to",
+    }
+    relation_type = aliases.get(normalized, normalized.replace(" ", "_"))
+    return relation_type if relation_type in _TIMELINE_RELATION_TYPES else "related_to"
+
+
+def resolve_timeline_group(
+    client: OpenAI,
+    config: Config,
+    group: dict,
+    *,
+    log_prefix: str = "",
+) -> dict:
+    """Прогоняет один chapter-level блок через LLM для timeline resolution."""
+    facts_block = format_timeline_facts_for_prompt(
+        group.get("facts", []),
+        limit=max(config.timeline_group_max_facts, 1),
+    )
+    chunks_block = format_timeline_chunks_for_prompt(
+        group.get("chunk_records", []),
+        token_limit=max(config.timeline_chunk_excerpt_tokens, 120),
+    )
+
+    response = call_llm(
+        client,
+        config,
+        TIMELINE_RESOLUTION_SYSTEM,
+        TIMELINE_RESOLUTION_PROMPT.format(
+            book_name=group.get("book_name", ""),
+            chapter=group.get("chapter", ""),
+            facts_block=facts_block,
+            chunks_block=chunks_block,
+        ),
+        max_tokens=config.max_tokens_timeline_resolution,
+        response_format="json" if _use_ollama_native else None,
+        log_prefix=log_prefix,
+        temperature=0.1,
+    )
+
+    fallback = {
+        "entities": [],
+        "events": build_fallback_timeline_events(group.get("facts", [])),
+        "relations": [],
+    }
+    if response is None:
+        return fallback
+
+    data, _ = parse_json_response(response, expect="object", log_prefix=log_prefix)
+    if not isinstance(data, dict):
+        return fallback
+
+    entities = data.get("entities", [])
+    events = data.get("events", [])
+    relations = data.get("relations", [])
+    if not isinstance(entities, list):
+        entities = []
+    if not isinstance(events, list):
+        events = []
+    if not isinstance(relations, list):
+        relations = []
+
+    if not events:
+        events = fallback["events"]
+
+    return {
+        "entities": [item for item in entities if isinstance(item, dict)],
+        "events": [item for item in events if isinstance(item, dict)],
+        "relations": [item for item in relations if isinstance(item, dict)],
+    }
+
+
+def ensure_timeline_entity_node(
+    nodes_by_id: dict[str, dict],
+    label: str,
+    *,
+    category: str = "",
+    source_book: str = "",
+) -> Optional[str]:
+    """Добавляет/обновляет сущность графа и возвращает её id."""
+    clean_label = strip_text(label)
+    if not clean_label:
+        return None
+
+    node_id = timeline_entity_node_id(clean_label, category)
+    node = nodes_by_id.setdefault(node_id, {
+        "id": node_id,
+        "label": clean_label,
+        "type": timeline_entity_type_for_category(category),
+        "source_books": [],
+    })
+    if source_book and source_book not in node["source_books"]:
+        node["source_books"].append(source_book)
+        node["source_books"].sort()
+    if category and node.get("type") == "unknown":
+        node["type"] = timeline_entity_type_for_category(category)
+    return node_id
+
+
+def add_timeline_edge(
+    edges: list[dict],
+    seen_edges: set[str],
+    *,
+    source: str,
+    target: str,
+    relation_type: str,
+    book_name: str,
+    chapter: str,
+    evidence: str = "",
+    confidence: str = "explicit",
+    chunk_indices: Optional[list[int]] = None,
+):
+    """Добавляет ребро графа без дублей."""
+    if not source or not target or source == target:
+        return
+    relation_type = normalize_timeline_relation_type(relation_type)
+    payload = {
+        "source": source,
+        "target": target,
+        "type": relation_type,
+        "book": book_name,
+        "chapter": chapter,
+        "chunk_indices": sorted(chunk_indices or []),
+    }
+    edge_key = text_hash(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    if edge_key in seen_edges:
+        return
+    seen_edges.add(edge_key)
+    edges.append({
+        **payload,
+        "evidence": strip_text(evidence),
+        "confidence": strip_text(confidence) or "explicit",
+    })
+
+
+def merge_timeline_resolution_outputs(
+    raw_groups: list[dict],
+    unique_knowledge: list[dict],
+) -> dict:
+    """Собирает единый граф из chapter-level timeline outputs."""
+    nodes_by_id: dict[str, dict] = {}
+    edges: list[dict] = []
+    seen_edges: set[str] = set()
+
+    subject_category_map: dict[str, str] = {}
+    for item in unique_knowledge:
+        subject = strip_text(item.get("subject", ""))
+        if not subject:
+            continue
+        subject_category_map[normalize_subject_for_dedup(subject)] = strip_text(item.get("category", ""))
+        ensure_timeline_entity_node(
+            nodes_by_id,
+            subject,
+            category=strip_text(item.get("category", "")),
+            source_book=strip_text(item.get("source_book", "")),
+        )
+
+    event_count = 0
+    for group in raw_groups:
+        book_name = group.get("book_name", "")
+        chapter = group.get("chapter", "")
+        local_event_ids: dict[str, str] = {}
+
+        for order, event in enumerate(group.get("events", []), 1):
+            local_id = strip_text(event.get("local_id", "")) or f"E{order}"
+            event_id = timeline_event_node_id(book_name, chapter, event_count + order)
+            local_event_ids[local_id] = event_id
+            nodes_by_id[event_id] = {
+                "id": event_id,
+                "label": strip_text(event.get("label", "")) or f"{chapter}: событие {order}",
+                "type": "event",
+                "book": book_name,
+                "chapter": chapter,
+                "summary": strip_text(event.get("summary", "")),
+                "time_scope": normalize_time_scope(
+                    event.get("time_scope", ""),
+                    fact=strip_text(event.get("summary", "")) or strip_text(event.get("label", "")),
+                    category="event",
+                ),
+                "chunk_indices": sorted(
+                    idx for idx in event.get("chunk_indices", [])
+                    if isinstance(idx, int)
+                ),
+            }
+            for label_group, relation_type, category_hint in (
+                (event.get("participants", []), "involves", "character"),
+                (event.get("places", []), "occurs_in", "place"),
+                (event.get("objects", []), "uses", "custom"),
+            ):
+                if not isinstance(label_group, list):
+                    continue
+                for label in label_group:
+                    normalized_label = strip_text(label)
+                    if not normalized_label:
+                        continue
+                    entity_id = ensure_timeline_entity_node(
+                        nodes_by_id,
+                        normalized_label,
+                        category=subject_category_map.get(
+                            normalize_subject_for_dedup(normalized_label),
+                            category_hint,
+                        ),
+                        source_book=book_name,
+                    )
+                    if entity_id:
+                        add_timeline_edge(
+                            edges,
+                            seen_edges,
+                            source=event_id,
+                            target=entity_id,
+                            relation_type=relation_type,
+                            book_name=book_name,
+                            chapter=chapter,
+                            chunk_indices=nodes_by_id[event_id].get("chunk_indices", []),
+                        )
+        event_count += len(group.get("events", []))
+
+        for entity in group.get("entities", []):
+            label = strip_text(entity.get("label", ""))
+            if not label:
+                continue
+            ensure_timeline_entity_node(
+                nodes_by_id,
+                label,
+                category=strip_text(entity.get("type", "")),
+                source_book=book_name,
+            )
+
+        for relation in group.get("relations", []):
+            source_ref = strip_text(relation.get("source", ""))
+            target_ref = strip_text(relation.get("target", ""))
+            if not source_ref or not target_ref:
+                continue
+
+            if source_ref in local_event_ids:
+                source_id = local_event_ids[source_ref]
+            else:
+                source_id = ensure_timeline_entity_node(
+                    nodes_by_id,
+                    source_ref,
+                    category=subject_category_map.get(normalize_subject_for_dedup(source_ref), ""),
+                    source_book=book_name,
+                )
+
+            if target_ref in local_event_ids:
+                target_id = local_event_ids[target_ref]
+            else:
+                target_id = ensure_timeline_entity_node(
+                    nodes_by_id,
+                    target_ref,
+                    category=subject_category_map.get(normalize_subject_for_dedup(target_ref), ""),
+                    source_book=book_name,
+                )
+
+            if source_id and target_id:
+                add_timeline_edge(
+                    edges,
+                    seen_edges,
+                    source=source_id,
+                    target=target_id,
+                    relation_type=strip_text(relation.get("type", "")),
+                    book_name=book_name,
+                    chapter=chapter,
+                    evidence=strip_text(relation.get("evidence", "")),
+                    confidence=strip_text(relation.get("confidence", "")) or "explicit",
+                )
+
+    nodes = sorted(
+        nodes_by_id.values(),
+        key=lambda item: (item.get("type", ""), item.get("label", ""), item.get("id", "")),
+    )
+    edges.sort(key=lambda item: (item.get("type", ""), item.get("source", ""), item.get("target", ""), item.get("book", "")))
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "groups": [
+            {
+                "book_name": group.get("book_name", ""),
+                "chapter": group.get("chapter", ""),
+                "facts": len(group.get("facts", [])),
+                "events": len(group.get("events", [])),
+                "relations": len(group.get("relations", [])),
+            }
+            for group in raw_groups
+        ],
+    }
+
+
+def save_readable_timeline_graph(graph: dict, path: str):
+    """Сохраняет граф timeline в человекочитаемом виде."""
+    nodes = graph.get("nodes", [])
+    edges = graph.get("edges", [])
+    groups = graph.get("groups", [])
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("TIMELINE / KNOWLEDGE GRAPH\n")
+        f.write(f"{'═' * 60}\n")
+        f.write(f"Узлов: {len(nodes)}\n")
+        f.write(f"Рёбер: {len(edges)}\n")
+        f.write(f"Групп глав: {len(groups)}\n\n")
+
+        by_type: dict[str, list[dict]] = {}
+        for node in nodes:
+            by_type.setdefault(node.get("type", "unknown"), []).append(node)
+
+        for node_type in sorted(by_type.keys()):
+            f.write(f"\n{'━' * 60}\n")
+            f.write(f"  {node_type} ({len(by_type[node_type])})\n")
+            f.write(f"{'━' * 60}\n\n")
+            for node in by_type[node_type]:
+                line = f"  ▸ {node.get('label', '')}"
+                if node_type == "event":
+                    summary = strip_text(node.get("summary", ""))
+                    chapter = strip_text(node.get("chapter", ""))
+                    time_scope = strip_text(node.get("time_scope", ""))
+                    if chapter:
+                        line += f" [{chapter}]"
+                    if time_scope:
+                        line += f" <{time_scope}>"
+                    f.write(line + "\n")
+                    if summary:
+                        f.write(f"    — {summary}\n")
+                else:
+                    books = node.get("source_books", [])
+                    f.write(line + ("\n" if not books else f" ({', '.join(books)})\n"))
+            f.write("\n")
+
+        f.write(f"\n{'━' * 60}\n  Связи ({len(edges)})\n{'━' * 60}\n\n")
+        for edge in edges:
+            f.write(
+                f"  ▸ {edge.get('type', 'related_to')}: "
+                f"{edge.get('source', '')} -> {edge.get('target', '')}\n"
+            )
+            evidence = strip_text(edge.get("evidence", ""))
+            if evidence:
+                f.write(f"    — {evidence}\n")
+
+
+def build_timeline_resolution_artifacts(
+    client: OpenAI,
+    config: Config,
+    output_dir: str,
+    book_names: list[str],
+    raw_knowledge: list[dict],
+    unique_knowledge: list[dict],
+    log_prefix: str = "",
+    progress_callback: Optional[Any] = None,
+) -> tuple[list[dict], dict]:
+    """Отдельный offline-этап: timeline resolution и построение общего графа."""
+    global_paths = get_global_output_paths(output_dir)
+    if not config.timeline_resolution_enabled or not raw_knowledge:
+        empty_graph = {"nodes": [], "edges": [], "groups": []}
+        with open(global_paths["timeline_raw"], "w", encoding="utf-8") as f:
+            json.dump([], f, ensure_ascii=False, indent=2)
+        with open(global_paths["timeline_graph"], "w", encoding="utf-8") as f:
+            json.dump(empty_graph, f, ensure_ascii=False, indent=2)
+        save_readable_timeline_graph(empty_graph, str(global_paths["timeline_graph_txt"]))
+        return [], empty_graph
+
+    timeline_groups = build_timeline_groups(output_dir, raw_knowledge, book_names, config)
+    resolved_groups = []
+    for idx, group in enumerate(timeline_groups, 1):
+        if stop_requested():
+            raise GracefulInterrupt("Остановка запрошена во время timeline resolution")
+
+        log_tag = (
+            f"{log_prefix}[{idx}/{len(timeline_groups)}]"
+            f"[{get_book_stem(group.get('book_name', ''))}]"
+        ) if log_prefix else ""
+        resolved = resolve_timeline_group(
+            client,
+            config,
+            group,
+            log_prefix=log_tag,
+        )
+        resolved_groups.append({
+            "book_name": group.get("book_name", ""),
+            "chapter": group.get("chapter", ""),
+            "chunk_indices": group.get("chunk_indices", []),
+            "fact_count": len(group.get("facts", [])),
+            "chunk_count": len(group.get("chunk_records", [])),
+            "entities": resolved.get("entities", []),
+            "events": resolved.get("events", []),
+            "relations": resolved.get("relations", []),
+        })
+        if progress_callback is not None:
+            progress_callback(
+                "timeline_group_resolved",
+                group_index=idx,
+                group_total=len(timeline_groups),
+                book_name=group.get("book_name", ""),
+                chapter=group.get("chapter", ""),
+                fact_count=len(group.get("facts", [])),
+                event_count=len(resolved.get("events", [])),
+                relation_count=len(resolved.get("relations", [])),
+            )
+
+    with open(global_paths["timeline_raw"], "w", encoding="utf-8") as f:
+        json.dump(resolved_groups, f, ensure_ascii=False, indent=2)
+
+    graph = merge_timeline_resolution_outputs(resolved_groups, unique_knowledge)
+    with open(global_paths["timeline_graph"], "w", encoding="utf-8") as f:
+        json.dump(graph, f, ensure_ascii=False, indent=2)
+    save_readable_timeline_graph(graph, str(global_paths["timeline_graph_txt"]))
+    if progress_callback is not None:
+        progress_callback(
+            "timeline_complete",
+            timeline_groups=len(resolved_groups),
+            timeline_nodes=len(graph.get("nodes", [])),
+            timeline_edges=len(graph.get("edges", [])),
+        )
+
+    if log_prefix:
+        log_event(
+            f"{log_prefix} timeline graph: groups={len(resolved_groups)}, "
+            f"nodes={len(graph.get('nodes', []))}, edges={len(graph.get('edges', []))}"
+        )
+
+    return resolved_groups, graph
 
 
 def is_book_processed(output_dir: str, book_name: str) -> bool:
@@ -885,6 +1856,8 @@ def load_chunk_checkpoint(path: Path, chunks: list[str], log_prefix: str = "") -
         records_by_idx[idx] = {
             "dialogues": dialogues,
             "knowledge": knowledge,
+            "chapter": strip_text(record.get("chapter", "")),
+            "chunk_text": record.get("chunk_text") if isinstance(record.get("chunk_text"), str) else chunks[idx],
         }
 
     return records_by_idx
@@ -961,6 +1934,7 @@ def call_llm_ollama_native(
     response_format: Optional[Any] = None,
     log_prefix: str = "",
     temperature: Optional[float] = None,
+    trace_id: str = "",
 ) -> Optional[str]:
     """Вызов через нативный API ollama с think=false."""
     import urllib.request
@@ -991,6 +1965,25 @@ def call_llm_ollama_native(
     if response_format is not None:
         payload_data["format"] = response_format
 
+    trace_id = trace_id or next_llm_trace_id(log_prefix)
+    save_llm_request_trace(
+        config,
+        trace_id,
+        {
+            "trace_id": trace_id,
+            "ts": now_iso_str(),
+            "provider": "ollama_native",
+            "api_base": config.api_base,
+            "model": config.model,
+            "log_prefix": log_prefix,
+            "max_tokens": max_tokens,
+            "temperature": effective_temperature,
+            "response_format": response_format,
+            "timeout_seconds": config.request_timeout,
+            "request_payload": payload_data,
+        },
+    )
+
     payload = json.dumps(payload_data).encode("utf-8")
 
     for attempt in range(3):
@@ -1015,8 +2008,27 @@ def call_llm_ollama_native(
                 # Подстраховка
                 if content and "<think>" in content:
                     content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+                elapsed = time.time() - t0
+                save_llm_response_trace(
+                    config,
+                    trace_id,
+                    attempt + 1,
+                    {
+                        "trace_id": trace_id,
+                        "ts": now_iso_str(),
+                        "provider": "ollama_native",
+                        "status": "ok",
+                        "attempt": attempt + 1,
+                        "log_prefix": log_prefix,
+                        "elapsed_seconds": round(elapsed, 3),
+                        "content": content,
+                        "done_reason": data.get("done_reason", "unknown"),
+                        "prompt_tokens": data.get("prompt_eval_count"),
+                        "completion_tokens": data.get("eval_count"),
+                        "raw_response": data,
+                    },
+                )
                 if log_prefix:
-                    elapsed = time.time() - t0
                     done_reason = data.get("done_reason", "unknown")
                     prompt_tokens = data.get("prompt_eval_count")
                     completion_tokens = data.get("eval_count")
@@ -1034,8 +2046,23 @@ def call_llm_ollama_native(
         except Exception as e:
             if stop_requested():
                 return None
+            elapsed = time.time() - t0
+            save_llm_response_trace(
+                config,
+                trace_id,
+                attempt + 1,
+                {
+                    "trace_id": trace_id,
+                    "ts": now_iso_str(),
+                    "provider": "ollama_native",
+                    "status": "error",
+                    "attempt": attempt + 1,
+                    "log_prefix": log_prefix,
+                    "elapsed_seconds": round(elapsed, 3),
+                    "error": str(e),
+                },
+            )
             if log_prefix:
-                elapsed = time.time() - t0
                 log_event(
                     f"{log_prefix} ошибка API "
                     f"(попытка {attempt + 1}/3, {elapsed:.1f}s): {e}"
@@ -1056,11 +2083,44 @@ def call_llm_openai(
     response_format: Optional[Any] = None,
     log_prefix: str = "",
     temperature: Optional[float] = None,
+    trace_id: str = "",
 ) -> Optional[str]:
     """Вызов через OpenAI-совместимый API (vllm, llama.cpp, LM Studio)."""
     effective_temperature = config.temperature if temperature is None else temperature
     if stop_requested():
         return None
+
+    trace_id = trace_id or next_llm_trace_id(log_prefix)
+    request_kwargs = {
+        "model": config.model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "temperature": effective_temperature,
+        "max_tokens": max_tokens,
+        "timeout": config.request_timeout,
+    }
+    if response_format is not None:
+        request_kwargs["response_format"] = response_format
+    save_llm_request_trace(
+        config,
+        trace_id,
+        {
+            "trace_id": trace_id,
+            "ts": now_iso_str(),
+            "provider": "openai_compatible",
+            "api_base": config.api_base,
+            "model": config.model,
+            "log_prefix": log_prefix,
+            "max_tokens": max_tokens,
+            "temperature": effective_temperature,
+            "response_format": response_format,
+            "timeout_seconds": config.request_timeout,
+            "request_payload": request_kwargs,
+        },
+    )
+
     for attempt in range(3):
         if stop_requested():
             return None
@@ -1071,29 +2131,35 @@ def call_llm_openai(
                 f"(попытка {attempt + 1}/3, max_tokens={max_tokens})"
             )
         try:
-            kwargs = {
-                "model": config.model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                "temperature": effective_temperature,
-                "max_tokens": max_tokens,
-                "timeout": config.request_timeout,
-            }
-            if response_format is not None:
-                kwargs["response_format"] = response_format
-
             response = client.chat.completions.create(
-                **kwargs,
+                **request_kwargs,
             )
             content = response.choices[0].message.content
             if content and "<think>" in content:
                 content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+            elapsed = time.time() - t0
+            usage = getattr(response, "usage", None)
+            save_llm_response_trace(
+                config,
+                trace_id,
+                attempt + 1,
+                {
+                    "trace_id": trace_id,
+                    "ts": now_iso_str(),
+                    "provider": "openai_compatible",
+                    "status": "ok",
+                    "attempt": attempt + 1,
+                    "log_prefix": log_prefix,
+                    "elapsed_seconds": round(elapsed, 3),
+                    "content": content,
+                    "finish_reason": response.choices[0].finish_reason or "unknown",
+                    "prompt_tokens": getattr(usage, "prompt_tokens", None) if usage is not None else None,
+                    "completion_tokens": getattr(usage, "completion_tokens", None) if usage is not None else None,
+                    "raw_response": response,
+                },
+            )
             if log_prefix:
-                elapsed = time.time() - t0
                 finish_reason = response.choices[0].finish_reason or "unknown"
-                usage = getattr(response, "usage", None)
                 token_info = []
                 if usage is not None:
                     if getattr(usage, "prompt_tokens", None) is not None:
@@ -1109,8 +2175,23 @@ def call_llm_openai(
         except Exception as e:
             if stop_requested():
                 return None
+            elapsed = time.time() - t0
+            save_llm_response_trace(
+                config,
+                trace_id,
+                attempt + 1,
+                {
+                    "trace_id": trace_id,
+                    "ts": now_iso_str(),
+                    "provider": "openai_compatible",
+                    "status": "error",
+                    "attempt": attempt + 1,
+                    "log_prefix": log_prefix,
+                    "elapsed_seconds": round(elapsed, 3),
+                    "error": str(e),
+                },
+            )
             if log_prefix:
-                elapsed = time.time() - t0
                 log_event(
                     f"{log_prefix} ошибка API "
                     f"(попытка {attempt + 1}/3, {elapsed:.1f}s): {e}"
@@ -1137,6 +2218,7 @@ def call_llm(
     temperature: Optional[float] = None,
 ) -> Optional[str]:
     """Вызов LLM. Автоматически использует нативный API ollama если доступен."""
+    trace_id = next_llm_trace_id(log_prefix)
     if _use_ollama_native:
         return call_llm_ollama_native(
             config,
@@ -1146,6 +2228,7 @@ def call_llm(
             response_format=response_format,
             log_prefix=log_prefix,
             temperature=temperature,
+            trace_id=trace_id,
         )
     else:
         return call_llm_openai(
@@ -1157,6 +2240,7 @@ def call_llm(
             response_format=response_format,
             log_prefix=log_prefix,
             temperature=temperature,
+            trace_id=trace_id,
         )
 
 
@@ -1520,6 +2604,76 @@ def split_into_chunks(
 def split_chunk_paragraphs(text: str) -> list[str]:
     """Разбивает чанк на абзацы, сохраняя только непустые куски."""
     return [part.strip() for part in re.split(r"\n\s*\n", text or "") if part.strip()]
+
+
+def default_chapter_label(book_name: str) -> str:
+    """Возвращает безопасное имя главы по умолчанию, если заголовок не найден."""
+    label = Path(book_name).with_suffix("").name.strip()
+    return label or "Без названия"
+
+
+def extract_chunk_heading(chunk: str) -> str:
+    """Пытается вытащить заголовок главы/секции из начала чанка."""
+    paragraphs = split_chunk_paragraphs(chunk)
+    for paragraph in paragraphs[:6]:
+        text = strip_text(paragraph)
+        if not text or text == SECTION_BREAK_MARKER or is_scene_break(text):
+            continue
+        if looks_like_heading(text):
+            return text
+    return ""
+
+
+def build_chunk_chapter_map(chunks: list[str], book_name: str) -> list[str]:
+    """Строит карту chunk_idx -> chapter, наследуя последний найденный заголовок."""
+    current = default_chapter_label(book_name)
+    chapter_map: list[str] = []
+
+    for chunk in chunks:
+        heading = extract_chunk_heading(chunk)
+        if heading:
+            current = heading
+        chapter_map.append(current)
+
+    return chapter_map
+
+
+def attach_knowledge_source_fields(
+    items: list[dict],
+    *,
+    book_name: str,
+    chapter: str,
+    chunk_idx: Optional[int],
+) -> list[dict]:
+    """Добавляет к фактам источник: книга, глава и индекс чанка."""
+    result = []
+    normalized_chapter = strip_text(chapter) or default_chapter_label(book_name)
+    normalized_chunk_idx = int(chunk_idx) if isinstance(chunk_idx, int) else None
+
+    for item in items:
+        cleaned = dict(item)
+        cleaned["source_book"] = book_name
+        cleaned["chapter"] = normalized_chapter
+        cleaned["chunk_idx"] = normalized_chunk_idx
+        result.append(cleaned)
+
+    return result
+
+
+def ensure_knowledge_source_defaults(items: list[dict], book_name: str) -> list[dict]:
+    """Подставляет source-поля для старых фактов, если они отсутствуют."""
+    result = []
+    fallback_chapter = default_chapter_label(book_name)
+
+    for item in items:
+        cleaned = dict(item)
+        cleaned["source_book"] = strip_text(cleaned.get("source_book", "")) or book_name
+        cleaned["chapter"] = strip_text(cleaned.get("chapter", "")) or fallback_chapter
+        chunk_idx = cleaned.get("chunk_idx")
+        cleaned["chunk_idx"] = chunk_idx if isinstance(chunk_idx, int) else None
+        result.append(cleaned)
+
+    return result
 
 
 def take_neighbor_excerpt(chunk: str, token_limit: int, from_end: bool) -> str:
@@ -4369,6 +5523,7 @@ def generate_synth_pairs(
     synth_output_path: Optional[Path] = None,
     readable_output_path: Optional[Path] = None,
     workers: int = 1,
+    progress_callback: Optional[Any] = None,
 ) -> list[dict]:
     """Генерирует синтетические обучающие пары из базы знаний с resume."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -4389,6 +5544,13 @@ def generate_synth_pairs(
             save_readable_voice(pairs, str(readable_output_path))
 
     produced_pairs = len(pairs)
+    if progress_callback is not None:
+        progress_callback(
+            "synth_started",
+            total_target_facts=len(target_facts),
+            processed_facts=len(processed_fact_hashes),
+            produced_pairs=produced_pairs,
+        )
     pending_facts = []
     for i, fact in enumerate(target_facts, 1):
         fact_hash = stable_fact_hash(fact)
@@ -4438,6 +5600,14 @@ def generate_synth_pairs(
                     append_jsonl(synth_output_path, [pair])
                 if readable_output_path is not None:
                     save_readable_voice(pairs, str(readable_output_path))
+            if progress_callback is not None:
+                progress_callback(
+                    "synth_progress",
+                    processed_facts=len(processed_fact_hashes),
+                    total_target_facts=len(target_facts),
+                    produced_pairs=produced_pairs,
+                    last_fact_idx=idx,
+                )
             print(f"    [{idx}/{len(target_facts)}] сгенерировано: {produced_pairs}", end="\r")
     except KeyboardInterrupt as exc:
         request_stop()
@@ -4454,6 +5624,13 @@ def generate_synth_pairs(
         executor.shutdown(wait=not stop_requested(), cancel_futures=stop_requested())
 
     print()
+    if progress_callback is not None:
+        progress_callback(
+            "synth_complete",
+            processed_facts=len(processed_fact_hashes),
+            total_target_facts=len(target_facts),
+            produced_pairs=produced_pairs,
+        )
     return pairs
 
 
@@ -4592,6 +5769,7 @@ def process_book(
     books_completed_before: int = 0,
     pipeline_t0: Optional[float] = None,
     seed: int = 42,
+    progress_callback: Optional[Any] = None,
 ) -> dict:
     """Обрабатывает одну книгу. Возвращает dict с voice_pairs, knowledge, synth_pairs."""
 
@@ -4612,6 +5790,14 @@ def process_book(
     print(f"  Режим: {MODE_DESC.get(mode, mode)}")
     print(f"  Голос: {'regex' if voice_extractor == 'regex' else 'LLM'}")
     print(f"{'='*60}")
+    if progress_callback is not None:
+        progress_callback(
+            "book_started",
+            book_name=book_name,
+            narrator=narrator,
+            mode=mode,
+            voice_extractor=voice_extractor,
+        )
 
     book_t0 = time.time()
 
@@ -4624,7 +5810,14 @@ def process_book(
         config=config,
         log_prefix=f"[chunking {get_book_stem(book_name)}]",
     )
+    chunk_chapter_map = build_chunk_chapter_map(chunks, book_name)
     print(f"  Нарезано на {len(chunks)} фрагментов")
+    if progress_callback is not None:
+        progress_callback(
+            "book_chunked",
+            book_name=book_name,
+            total_chunks=len(chunks),
+        )
 
     # Пути промежуточных файлов
     output_paths = get_book_output_paths(config.output_dir, book_name)
@@ -4650,6 +5843,15 @@ def process_book(
         checkpoint_records = load_chunk_checkpoint(chunk_results_path, chunks, log_prefix=resume_prefix)
         if checkpoint_records:
             print(f"  Возобновление: найдено {len(checkpoint_records)}/{len(chunks)} обработанных фрагментов")
+            for idx, record in checkpoint_records.items():
+                record["chapter"] = record.get("chapter") or chunk_chapter_map[idx]
+                record["chunk_text"] = record.get("chunk_text") or chunks[idx]
+                record["knowledge"] = attach_knowledge_source_fields(
+                    record.get("knowledge", []),
+                    book_name=book_name,
+                    chapter=record["chapter"],
+                    chunk_idx=idx,
+                )
             voice_pairs, all_knowledge = rebuild_chunk_outputs(
                 checkpoint_records,
                 config,
@@ -4671,6 +5873,15 @@ def process_book(
                 save_readable_knowledge(
                     deduplicate_knowledge(all_knowledge),
                     str(knowledge_txt_path),
+                )
+            if progress_callback is not None:
+                progress_callback(
+                    "book_resumed",
+                    book_name=book_name,
+                    resumed_chunks=len(checkpoint_records),
+                    total_chunks=len(chunks),
+                    book_voice_pairs=len(voice_pairs),
+                    book_knowledge_facts=len(deduplicate_knowledge(all_knowledge)),
                 )
         else:
             log_event(f"{resume_prefix} checkpoint пустой или устарел, начинаю книгу заново")
@@ -4705,12 +5916,19 @@ def process_book(
         knowledge = kwargs["knowledge"]
         progress = kwargs["progress"]
         tag = kwargs["meta"]["tag"]
+        chapter = chunk_chapter_map[idx] if idx < len(chunk_chapter_map) else default_chapter_label(book_name)
 
         if knowledge:
             knowledge = normalize_knowledge_items(
                 knowledge,
                 narrator,
                 log_prefix=f"{tag}[knowledge]",
+            )
+            knowledge = attach_knowledge_source_fields(
+                knowledge,
+                book_name=book_name,
+                chapter=chapter,
+                chunk_idx=idx,
             )
             knowledge = link_knowledge_items_with_retrieval(
                 client,
@@ -4723,6 +5941,8 @@ def process_book(
         append_jsonl(chunk_results_path, [{
             "idx": idx,
             "chunk_hash": text_hash(chunk),
+            "chapter": chapter,
+            "chunk_text": chunk,
             "dialogues": dialogues,
             "knowledge": knowledge,
         }])
@@ -4747,6 +5967,16 @@ def process_book(
             save_readable_knowledge(
                 deduplicate_knowledge(all_knowledge),
                 str(knowledge_txt_path),
+            )
+        if progress_callback is not None:
+            progress_callback(
+                "chunk_complete",
+                book_name=book_name,
+                chunk_idx=idx,
+                total_chunks=len(chunks),
+                completed_chunks=progress.get("completed", 0),
+                book_voice_pairs=len(voice_pairs),
+                book_knowledge_facts=len(deduplicate_knowledge(all_knowledge)),
             )
 
         completed_fraction = books_completed_before + (progress["completed"] / max(progress["total"], 1))
@@ -4889,6 +6119,14 @@ def process_book(
             synth_output_path=synth_path,
             readable_output_path=synth_txt_path,
             workers=workers,
+            progress_callback=(
+                (lambda event_type, **event_data: progress_callback(
+                    event_type,
+                    book_name=book_name,
+                    **event_data,
+                ))
+                if progress_callback is not None else None
+            ),
         )
         pass3_dur = time.time() - t_start_s
         print(f"  [{now_str()}] Синтетических пар: {len(synth_pairs)} за {fmt_duration(pass3_dur)}")
@@ -4905,6 +6143,15 @@ def process_book(
     book_dur = time.time() - book_t0
     done_path.touch()
     print(f"\n  [{now_str()}] Книга обработана за {fmt_duration(book_dur)}")
+    if progress_callback is not None:
+        progress_callback(
+            "book_completed",
+            book_name=book_name,
+            book_voice_pairs=len(voice_pairs),
+            book_knowledge_facts=len(all_knowledge),
+            book_synth_pairs=len(synth_pairs),
+            duration_seconds=round(book_dur, 1),
+        )
 
     return {
         "voice_pairs": voice_pairs,
@@ -5084,6 +6331,84 @@ def main() -> int:
 
     # Создаём папку для результатов
     Path(config.output_dir).mkdir(parents=True, exist_ok=True)
+    config.llm_trace_run_id = time.strftime("run_%Y%m%d_%H%M%S", time.localtime())
+    global_output_paths = get_global_output_paths(config.output_dir)
+    meta_path = global_output_paths["metadata"]
+    metadata_history_path = global_output_paths["metadata_history"]
+    if metadata_history_path.exists():
+        metadata_history_path.unlink()
+    metadata_state = {
+        "status": "starting",
+        "run_started_at": now_iso_str(),
+        "updated_at": now_iso_str(),
+        "seed": args.seed,
+        "model": config.model,
+        "books_dir": config.books_dir,
+        "output_dir": config.output_dir,
+        "chunk_size": config.chunk_size,
+        "workers": args.workers,
+        "voice_extractor": args.voice_extractor,
+        "request_timeout": config.request_timeout,
+        "llm_trace_enabled": config.llm_trace_enabled,
+        "llm_trace_run_id": config.llm_trace_run_id,
+        "extraction_passes": config.extraction_passes,
+        "extraction_neighbor_chunks": config.extraction_neighbor_chunks,
+        "extraction_neighbor_excerpt_tokens": config.extraction_neighbor_excerpt_tokens,
+        "extraction_context_budget": config.extraction_context_budget,
+        "timeline_resolution_enabled": config.timeline_resolution_enabled,
+        "skip_synth": args.skip_synth,
+        "synth_count": args.synth_count,
+        "current_stage": "startup",
+        "current_book": None,
+        "current_book_progress": {},
+        "books_total": 0,
+        "books_pending_total": 0,
+        "books_processed": 0,
+        "books_skipped": 0,
+        "total_pairs": 0,
+        "voice_pairs": 0,
+        "synth_pairs": 0,
+        "knowledge_raw_facts": 0,
+        "knowledge_facts": 0,
+        "timeline_groups": 0,
+        "timeline_nodes": 0,
+        "timeline_edges": 0,
+        "book_statuses": {},
+        "event_count": 0,
+        "recent_events": [],
+    }
+
+    def metadata_event(event_type: str = "", message: str = "", **updates):
+        return update_metadata_snapshot(
+            metadata_state,
+            meta_path,
+            history_path=metadata_history_path,
+            event_type=event_type,
+            message=message,
+            **updates,
+        )
+
+    metadata_event(
+        "run_started",
+        "Запуск пайплайна",
+        status="running",
+        current_stage="startup",
+    )
+
+    def refresh_global_knowledge_snapshot(event_type: str, current_book: Optional[str] = None):
+        raw_snapshot, unique_snapshot = write_global_knowledge_snapshot(
+            config.output_dir,
+            all_knowledge,
+            narrator="Макс",
+            log_prefix="[runtime][global_knowledge]",
+        )
+        metadata_event(
+            event_type,
+            current_stage="global_knowledge_snapshot",
+            current_book=current_book,
+            knowledge_raw_facts=len(raw_snapshot),
+            knowledge_facts=len(unique_snapshot),
+        )
 
     # ── Управление ollama ──
     ollama_process = None
@@ -5125,6 +6450,10 @@ def main() -> int:
 
         # Проверка соединения
         print("Проверка соединения с моделью...")
+        metadata_event(
+            "connection_check_started",
+            current_stage="connection_check",
+        )
         test = call_llm(client, config, "Ответь одним словом.", "Скажи: работает",
                         max_tokens=10)
         if stop_requested():
@@ -5132,8 +6461,18 @@ def main() -> int:
         if test is None:
             print(f"Не удалось подключиться к {config.api_base}")
             print(f"Убедись, что модель запущена (например: ollama run {config.model})")
+            metadata_event(
+                "connection_check_failed",
+                status="failed",
+                current_stage="connection_check",
+                run_finished_at=now_iso_str(),
+            )
             return 1
         print(f"Модель отвечает: {test.strip()}\n")
+        metadata_event(
+            "connection_check_ok",
+            current_stage="loading_books",
+        )
 
         # Загрузка книг
         print(f"Загрузка книг из {config.books_dir}/")
@@ -5142,6 +6481,12 @@ def main() -> int:
             raise GracefulInterrupt("Остановка запрошена во время загрузки книг")
         if not books:
             print("Книги не найдены.")
+            metadata_event(
+                "books_missing",
+                status="completed",
+                current_stage="done",
+                run_finished_at=now_iso_str(),
+            )
             return 0
 
         # Сортировка: книги Макса первыми (чтобы накопить стиль для синтетики)
@@ -5162,9 +6507,21 @@ def main() -> int:
             print(f"  {icon} {name} [{narrator}, {mode}]")
 
         books_pending_total = 0
+        book_statuses = {}
         for book_name, _ in books:
             if args.no_resume or not is_book_processed(config.output_dir, book_name):
                 books_pending_total += 1
+                book_statuses[book_name] = "pending"
+            else:
+                book_statuses[book_name] = "completed_existing"
+
+        metadata_event(
+            "books_loaded",
+            current_stage="books_loaded",
+            books_total=len(books),
+            books_pending_total=books_pending_total,
+            book_statuses=book_statuses,
+        )
 
         # Обработка
         all_voice_pairs = []
@@ -5172,6 +6529,32 @@ def main() -> int:
         all_synth_pairs = []
         pipeline_t0 = time.time()
         processed_books = 0
+
+        def stage_for_book_event(event_type: str) -> str:
+            if event_type.startswith("synth_"):
+                return "book_synth"
+            if event_type in {"book_started", "book_chunked", "book_resumed", "chunk_complete"}:
+                return "book_extraction"
+            if event_type == "book_completed":
+                return "book_complete"
+            return "book_processing"
+
+        def on_book_progress(event_type: str, **event_data):
+            current_book = event_data.get("book_name")
+            progress_payload = {
+                key: value
+                for key, value in event_data.items()
+                if key != "book_name"
+            }
+            metadata_event(
+                event_type,
+                current_stage=stage_for_book_event(event_type),
+                current_book=current_book,
+                current_book_progress={
+                    "book_name": current_book,
+                    **progress_payload,
+                },
+            )
 
         for _, (book_name, text) in enumerate(books):
             if stop_requested():
@@ -5198,6 +6581,13 @@ def main() -> int:
             if not args.no_resume and is_book_processed(config.output_dir, book_name):
                 print(f"\n  ⏭ Пропуск {book_name} (уже обработана, --no-resume для повтора)")
                 narrator, _ = detect_book_mode(book_name)
+                metadata_event(
+                    "book_skipped_existing",
+                    current_stage="book_skip",
+                    current_book=book_name,
+                    books_skipped=metadata_state.get("books_skipped", 0) + 1,
+                    book_statuses={book_name: "completed_existing"},
+                )
 
                 if voice_path.exists():
                     with open(voice_path, encoding="utf-8") as f:
@@ -5220,6 +6610,7 @@ def main() -> int:
                     loaded_knowledge = []
 
                 if loaded_knowledge:
+                    loaded_knowledge = ensure_knowledge_source_defaults(loaded_knowledge, book_name)
                     loaded_knowledge = canonicalize_book_knowledge(loaded_knowledge, narrator)
                     all_knowledge.extend(loaded_knowledge)
                     normalized_book_knowledge = deduplicate_knowledge(loaded_knowledge)
@@ -5231,6 +6622,10 @@ def main() -> int:
                     save_readable_knowledge(
                         normalized_book_knowledge,
                         str(output_paths["knowledge_txt"]),
+                    )
+                    refresh_global_knowledge_snapshot(
+                        "global_kb_snapshot_updated",
+                        current_book=book_name,
                     )
 
                 synth_path = output_paths["synth"]
@@ -5256,12 +6651,33 @@ def main() -> int:
                 books_completed_before=processed_books,
                 pipeline_t0=pipeline_t0,
                 seed=args.seed,
+                progress_callback=on_book_progress,
             )
             processed_books += 1
 
             all_voice_pairs.extend(result["voice_pairs"])
             all_knowledge.extend(result["knowledge"])
             all_synth_pairs.extend(result["synth_pairs"])
+            metadata_event(
+                "book_results_aggregated",
+                current_stage="books_loop",
+                current_book=book_name,
+                books_processed=processed_books,
+                voice_pairs=len(all_voice_pairs),
+                synth_pairs=len(all_synth_pairs),
+                knowledge_raw_facts=len(all_knowledge),
+                book_statuses={book_name: "completed"},
+                current_book_progress={
+                    "book_name": book_name,
+                    "book_voice_pairs": len(result["voice_pairs"]),
+                    "book_knowledge_facts": len(result["knowledge"]),
+                    "book_synth_pairs": len(result["synth_pairs"]),
+                },
+            )
+            refresh_global_knowledge_snapshot(
+                "global_kb_snapshot_updated",
+                current_book=book_name,
+            )
 
             # Человекочитаемые версии
             if result["voice_pairs"]:
@@ -5282,14 +6698,20 @@ def main() -> int:
 
             print(f"  Промежуточные файлы сохранены в {config.output_dir}/")
 
-        global_output_paths = get_global_output_paths(config.output_dir)
-
         # Дедупликация датасета
         print(f"\n[{now_str()}] Дедупликация...")
         unique_voice = deduplicate(all_voice_pairs)
         unique_synth = deduplicate(all_synth_pairs)
         print(f"  Голос: {len(all_voice_pairs)} → {len(unique_voice)}")
         print(f"  Синтетика: {len(all_synth_pairs)} → {len(unique_synth)}")
+        metadata_event(
+            "dataset_deduplicated",
+            current_stage="dataset_dedup",
+            current_book=None,
+            voice_pairs=len(unique_voice),
+            synth_pairs=len(unique_synth),
+            total_pairs=len(unique_voice) + len(unique_synth),
+        )
 
         # Отдельный этап: сборка общей базы знаний из per-book артефактов
         print(f"\n[{now_str()}] Сборка общей базы знаний...")
@@ -5297,8 +6719,51 @@ def main() -> int:
             config.output_dir,
             [book_name for book_name, _ in books],
             log_prefix="[global][knowledge]",
+            progress_callback=lambda event_type, **event_data: metadata_event(
+                event_type,
+                current_stage="global_knowledge",
+                current_book=None,
+                **event_data,
+            ),
         )
         print(f"  Знания: {len(raw_global_knowledge)} → {len(unique_knowledge)}")
+        metadata_event(
+            "global_knowledge_ready",
+            current_stage="global_knowledge",
+            current_book=None,
+            knowledge_raw_facts=len(raw_global_knowledge),
+            knowledge_facts=len(unique_knowledge),
+        )
+
+        print(f"\n[{now_str()}] Timeline resolution и сборка графа...")
+        raw_timeline_groups, timeline_graph = build_timeline_resolution_artifacts(
+            client,
+            config,
+            config.output_dir,
+            [book_name for book_name, _ in books],
+            raw_global_knowledge,
+            unique_knowledge,
+            log_prefix="[global][timeline]",
+            progress_callback=lambda event_type, **event_data: metadata_event(
+                event_type,
+                current_stage="timeline_resolution",
+                current_book=None,
+                **event_data,
+            ),
+        )
+        print(
+            f"  Timeline: групп={len(raw_timeline_groups)}, "
+            f"узлов={len(timeline_graph.get('nodes', []))}, "
+            f"рёбер={len(timeline_graph.get('edges', []))}"
+        )
+        metadata_event(
+            "timeline_ready",
+            current_stage="timeline_resolution",
+            current_book=None,
+            timeline_groups=len(raw_timeline_groups),
+            timeline_nodes=len(timeline_graph.get("nodes", [])),
+            timeline_edges=len(timeline_graph.get("edges", [])),
+        )
 
         # Объединённый датасет
         all_pairs = unique_voice + unique_synth
@@ -5313,31 +6778,26 @@ def main() -> int:
 
         # Метаданные запуска
         total_dur = time.time() - pipeline_t0
-        metadata = {
-            "seed": args.seed,
-            "model": config.model,
-            "chunk_size": config.chunk_size,
-            "workers": args.workers,
-            "voice_extractor": args.voice_extractor,
-            "request_timeout": config.request_timeout,
-            "extraction_passes": config.extraction_passes,
-            "extraction_neighbor_chunks": config.extraction_neighbor_chunks,
-            "extraction_neighbor_excerpt_tokens": config.extraction_neighbor_excerpt_tokens,
-            "extraction_context_budget": config.extraction_context_budget,
-            "synth_count": args.synth_count,
-            "skip_synth": args.skip_synth,
-            "total_pairs": len(all_pairs),
-            "voice_pairs": len(unique_voice),
-            "synth_pairs": len(unique_synth),
-            "knowledge_raw_facts": len(raw_global_knowledge),
-            "knowledge_facts": len(unique_knowledge),
-            "books_processed": len(books),
-            "total_duration_seconds": round(total_dur, 1),
-            "total_duration": fmt_duration(total_dur),
-        }
-        meta_path = global_output_paths["metadata"]
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(metadata, f, ensure_ascii=False, indent=2)
+        metadata_event(
+            "run_completed",
+            "Пайплайн завершён",
+            status="completed",
+            current_stage="done",
+            current_book=None,
+            current_book_progress={},
+            total_pairs=len(all_pairs),
+            voice_pairs=len(unique_voice),
+            synth_pairs=len(unique_synth),
+            knowledge_raw_facts=len(raw_global_knowledge),
+            knowledge_facts=len(unique_knowledge),
+            timeline_groups=len(raw_timeline_groups),
+            timeline_nodes=len(timeline_graph.get("nodes", [])),
+            timeline_edges=len(timeline_graph.get("edges", [])),
+            books_processed=len(books),
+            total_duration_seconds=round(total_dur, 1),
+            total_duration=fmt_duration(total_dur),
+            run_finished_at=now_iso_str(),
+        )
 
         print(f"\n{'='*60}")
         print(f"[{now_str()}] Готово за {fmt_duration(total_dur)}!")
@@ -5345,6 +6805,7 @@ def main() -> int:
         print(f"    — голос: {len(unique_voice)}")
         print(f"    — синтетика: {len(unique_synth)}")
         print(f"  База знаний: {kb_path} ({len(unique_knowledge)} фактов)")
+        print(f"  Timeline graph: {global_output_paths['timeline_graph']} ({len(timeline_graph.get('nodes', []))} узлов)")
         print(f"{'='*60}")
 
         # Статистика
@@ -5362,6 +6823,13 @@ def main() -> int:
 
         return 0
     except GracefulInterrupt:
+        metadata_event(
+            "run_interrupted",
+            "Пайплайн остановлен пользователем",
+            status="interrupted",
+            current_stage="interrupted",
+            run_finished_at=now_iso_str(),
+        )
         print(
             f"\n[{now_str()}] Остановка выполнена аккуратно. "
             f"Промежуточный прогресс сохранён в {config.output_dir}/, "
@@ -5370,12 +6838,27 @@ def main() -> int:
         return 130
     except KeyboardInterrupt:
         request_stop()
+        metadata_event(
+            "run_interrupted",
+            "Пайплайн остановлен пользователем",
+            status="interrupted",
+            current_stage="interrupted",
+            run_finished_at=now_iso_str(),
+        )
         print(
             f"\n[{now_str()}] Остановка выполнена аккуратно. "
             f"Промежуточный прогресс сохранён в {config.output_dir}/, "
             "можно продолжить повторным запуском."
         )
         return 130
+    except Exception:
+        metadata_event(
+            "run_failed",
+            status="failed",
+            current_stage="failed",
+            run_finished_at=now_iso_str(),
+        )
+        raise
     finally:
         stop_ollama(ollama_process)
 
