@@ -128,7 +128,7 @@ class Config:
     # API локальной модели
     api_base: str = "http://localhost:11434/v1"  # ollama по умолчанию
     api_key: str = "ollama"                       # ollama не требует ключа
-    model: str = "gemma4:e4b"
+    model: str = "gemma4"
 
     # Генерация
     temperature: float = 0.1     # низкая — нужна точность, не креатив
@@ -150,7 +150,22 @@ class Config:
     extraction_neighbor_chunks: int = 2        # по 2 соседних чанка с каждой стороны => окно до 5 чанков
     extraction_neighbor_excerpt_tokens: int = 180
     extraction_context_budget: int = 3400
+    knowledge_extraction_tracks: tuple[str, ...] = ("world", "scene")
+    knowledge_page_max_items: int = 12
+    knowledge_extraction_protocol: str = "lines"  # lines | json
+    knowledge_extract_model: str = ""
+    knowledge_dual_extraction_enabled: bool = True
+    knowledge_extract_model_secondary: str = "qwen3:8b"
+    knowledge_arbiter_model: str = ""
+    knowledge_ensemble_low_fact_threshold: int = 2
+    knowledge_ensemble_drop_ratio_threshold: float = 0.7
+    max_tokens_knowledge_arbiter: int = 700
+    knowledge_llm_validation_enabled: bool = True
+    knowledge_validate_model: str = ""
+    knowledge_validation_context_tokens: int = 1600
+    max_tokens_knowledge_validate: int = 500
     knowledge_linking_enabled: bool = True
+    knowledge_link_model: str = ""
     knowledge_link_top_k: int = 8
     knowledge_link_min_score: float = 6.0
     max_tokens_knowledge_link: int = 220
@@ -447,6 +462,81 @@ def extract_balanced_json_fragment(text: str, opening: str) -> Optional[str]:
     return None
 
 
+def repair_json_unescaped_quotes(text: str) -> str:
+    """Пытается экранировать неэкранированные кавычки внутри JSON-строк."""
+    repaired: list[str] = []
+    in_string = False
+    escaped = False
+
+    for idx, ch in enumerate(text):
+        if escaped:
+            repaired.append(ch)
+            escaped = False
+            continue
+
+        if ch == "\\":
+            repaired.append(ch)
+            escaped = True
+            continue
+
+        if ch == '"':
+            if not in_string:
+                in_string = True
+                repaired.append(ch)
+                continue
+
+            next_pos = idx + 1
+            while next_pos < len(text) and text[next_pos].isspace():
+                next_pos += 1
+            next_char = text[next_pos] if next_pos < len(text) else ""
+
+            if next_char in {",", "}", "]", ":", ""}:
+                in_string = False
+                repaired.append(ch)
+            else:
+                repaired.append('\\"')
+            continue
+
+        repaired.append(ch)
+
+    return "".join(repaired)
+
+
+def extract_partial_json_array_items(text: str) -> Optional[list[Any]]:
+    """Вытаскивает максимально длинный валидный префикс JSON-массива, если хвост обрезан."""
+    if not text:
+        return None
+
+    start = text.find("[")
+    if start == -1:
+        return None
+
+    decoder = json.JSONDecoder()
+    items: list[Any] = []
+    idx = start + 1
+
+    while idx < len(text):
+        while idx < len(text) and text[idx].isspace():
+            idx += 1
+        if idx >= len(text):
+            break
+        if text[idx] == "]":
+            return items
+        if text[idx] == ",":
+            idx += 1
+            continue
+
+        try:
+            item, next_idx = decoder.raw_decode(text, idx)
+        except json.JSONDecodeError:
+            break
+
+        items.append(item)
+        idx = next_idx
+
+    return items or None
+
+
 def parse_json_response(
     response: str,
     *,
@@ -476,6 +566,9 @@ def parse_json_response(
 
     opening = "{" if expect == "object" else "["
     add_candidate("balanced", extract_balanced_json_fragment(cleaned, opening))
+    add_candidate("raw+repair_quotes", repair_json_unescaped_quotes(cleaned))
+    balanced = extract_balanced_json_fragment(cleaned, opening)
+    add_candidate("balanced+repair_quotes", repair_json_unescaped_quotes(balanced) if balanced else None)
 
     last_error: Optional[json.JSONDecodeError] = None
     last_candidate = ""
@@ -498,6 +591,17 @@ def parse_json_response(
                 log_event(f"{log_prefix} JSON восстановлен стратегией `{strategy}`")
             return data, strategy
 
+    if expect == "array":
+        partial_candidates = [
+            ("partial_array", extract_partial_json_array_items(cleaned)),
+            ("partial_array+repair_quotes", extract_partial_json_array_items(repair_json_unescaped_quotes(cleaned))),
+        ]
+        for strategy, data in partial_candidates:
+            if isinstance(data, list) and data:
+                if log_prefix:
+                    log_event(f"{log_prefix} JSON восстановлен стратегией `{strategy}`")
+                return data, strategy
+
     if log_prefix:
         if last_error is not None:
             start = max(0, last_error.pos - 80)
@@ -511,6 +615,123 @@ def parse_json_response(
             log_event(f"{log_prefix} JSON не найден в ответе модели")
 
     return None, "failed"
+
+
+def parse_labeled_line_fields(line: str) -> Optional[dict[str, str]]:
+    """Парсит строку line-протокола вида `key=value | key=value | ...`."""
+    parts = [part.strip() for part in line.split("|")]
+    if len(parts) < 3:
+        return None
+
+    parsed: dict[str, str] = {}
+    for part in parts:
+        delimiter = "=" if "=" in part else ":" if ":" in part else ""
+        if not delimiter:
+            continue
+        key, value = part.split(delimiter, 1)
+        key = key.strip().lower()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            category_alias = _KNOWLEDGE_CATEGORY_ALIASES.get(key)
+            if category_alias and "subject" not in parsed:
+                parsed["category"] = category_alias
+                parsed["subject"] = value
+            else:
+                parsed[key] = value
+
+    if {"category", "subject", "fact"} <= set(parsed):
+        parsed.setdefault("time_scope", "unclear")
+        return parsed
+    return None
+
+
+def parse_positional_line_fields(line: str) -> Optional[dict[str, str]]:
+    """Парсит строку line-протокола без ключей."""
+    parts = [part.strip().strip('"').strip("'") for part in line.split("|")]
+    if len(parts) < 4:
+        return None
+    category = parts[0]
+    subject = parts[1]
+    time_scope = parts[-1]
+    fact = " | ".join(parts[2:-1]).strip()
+    if not category or not subject or not fact or not time_scope:
+        return None
+    return {
+        "category": category,
+        "subject": subject,
+        "fact": fact,
+        "time_scope": time_scope,
+    }
+
+
+def parse_knowledge_line_protocol(
+    response: str,
+    *,
+    log_prefix: str = "",
+) -> tuple[list[dict], str]:
+    """Парсит line-based protocol для фактов знаний."""
+    cleaned = clean_json_text(response)
+    items: list[dict] = []
+    seen = set()
+
+    for raw_line in cleaned.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        line = re.sub(r"^\s*[-*•]\s*", "", line)
+        line = re.sub(r"^\s*\d+[.)]\s*", "", line)
+        if not line:
+            continue
+        if line.lower().startswith(("category", "subject", "fact", "time_scope")) and "=" not in line and "|" not in line:
+            continue
+        if line.startswith("#") or line.startswith("[") and line.endswith("]"):
+            continue
+
+        parsed = parse_labeled_line_fields(line) or parse_positional_line_fields(line)
+        if not parsed:
+            continue
+
+        item = {
+            "category": strip_text(parsed.get("category", "")),
+            "subject": strip_text(parsed.get("subject", "")),
+            "fact": strip_text(parsed.get("fact", "")),
+            "time_scope": strip_text(parsed.get("time_scope", "")),
+        }
+        evidence = strip_text(parsed.get("evidence", ""))
+        if evidence:
+            item["evidence"] = evidence
+        item_key = text_hash(json.dumps(item, ensure_ascii=False, sort_keys=True))
+        if item_key in seen:
+            continue
+        seen.add(item_key)
+        items.append(item)
+
+    if items:
+        if log_prefix:
+            log_event(f"{log_prefix} line-protocol ok: {len(items)} фактов")
+        return items, "line_protocol"
+
+    if log_prefix:
+        log_event(f"{log_prefix} line-protocol не дал валидных строк")
+    return [], "failed"
+
+
+def extract_primary_chunk_text(source_text: str) -> str:
+    """Возвращает текст PRIMARY CHUNK из extraction payload, если он размечен."""
+    if not source_text:
+        return ""
+    if "[PRIMARY CHUNK" not in source_text:
+        return source_text
+
+    match = re.search(
+        r"\[PRIMARY CHUNK(?:[^\]]*)\]\s*\n(.*?)(?=\n\s*\[(?:SUPPORTING CONTEXT|SCENE GLOSSARY)\]|\Z)",
+        source_text,
+        flags=re.DOTALL,
+    )
+    if match:
+        return match.group(1).strip()
+    return source_text
 
 
 def append_jsonl(path: Path, items: list[dict]):
@@ -963,6 +1184,12 @@ def load_book_knowledge_for_global_base(
 
     if not items and paths["knowledge_stream"].exists():
         items = [item for item in read_jsonl(paths["knowledge_stream"], log_prefix=log_prefix) if isinstance(item, dict)]
+
+    if items:
+        items = validate_knowledge(
+            items,
+            log_prefix=f"{log_prefix}[reload]" if log_prefix else "",
+        )
 
     return items
 
@@ -1883,7 +2110,11 @@ def rebuild_chunk_outputs(
     for idx in sorted(checkpoint_records):
         record = checkpoint_records[idx]
         dialogues = record.get("dialogues", [])
-        knowledge = record.get("knowledge", [])
+        knowledge = validate_knowledge(
+            record.get("knowledge", []),
+            log_prefix=f"[resume chunk {idx + 1}][knowledge]",
+            source_text=record.get("chunk_text", ""),
+        )
 
         if dialogues:
             new_pairs = make_training_pairs(dialogues, config)
@@ -1937,6 +2168,7 @@ def call_llm_ollama_native(
     log_prefix: str = "",
     temperature: Optional[float] = None,
     trace_id: str = "",
+    model_override: Optional[str] = None,
 ) -> Optional[str]:
     """Вызов через нативный API ollama с think=false."""
     import urllib.request
@@ -1951,8 +2183,15 @@ def call_llm_ollama_native(
 
     url = f"{base}/api/chat"
     effective_temperature = config.temperature if temperature is None else temperature
+    model_name = model_override or config.model
+
+    # Рассчитываем num_ctx динамически: промпт + ответ + запас
+    prompt_tokens_est = estimate_tokens(system) + estimate_tokens(user)
+    # Минимум 4096, шаг 2048, запас = max_tokens + 256 на служебные токены
+    num_ctx = max(4096, ((prompt_tokens_est + max_tokens + 256 + 2047) // 2048) * 2048)
+
     payload_data = {
-        "model": config.model,
+        "model": model_name,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -1962,6 +2201,7 @@ def call_llm_ollama_native(
         "options": {
             "temperature": effective_temperature,
             "num_predict": max_tokens,
+            "num_ctx": num_ctx,
         },
     }
     if response_format is not None:
@@ -1976,7 +2216,7 @@ def call_llm_ollama_native(
             "ts": now_iso_str(),
             "provider": "ollama_native",
             "api_base": config.api_base,
-            "model": config.model,
+            "model": model_name,
             "log_prefix": log_prefix,
             "max_tokens": max_tokens,
             "temperature": effective_temperature,
@@ -2084,15 +2324,17 @@ def call_llm_openai(
     log_prefix: str = "",
     temperature: Optional[float] = None,
     trace_id: str = "",
+    model_override: Optional[str] = None,
 ) -> Optional[str]:
     """Вызов через OpenAI-совместимый API (vllm, llama.cpp, LM Studio)."""
     effective_temperature = config.temperature if temperature is None else temperature
+    model_name = model_override or config.model
     if stop_requested():
         return None
 
     trace_id = trace_id or next_llm_trace_id(log_prefix)
     request_kwargs = {
-        "model": config.model,
+        "model": model_name,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -2111,7 +2353,7 @@ def call_llm_openai(
             "ts": now_iso_str(),
             "provider": "openai_compatible",
             "api_base": config.api_base,
-            "model": config.model,
+            "model": model_name,
             "log_prefix": log_prefix,
             "max_tokens": max_tokens,
             "temperature": effective_temperature,
@@ -2205,6 +2447,38 @@ def call_llm_openai(
 _use_ollama_native = False
 
 
+def looks_like_degenerate_output(text: str, *, min_lines: int = 8) -> bool:
+    """Определяет зацикленный / дегенеративный вывод модели.
+
+    Ловит:
+    - Повторяющиеся строки (>60% одинаковых из ≥min_lines)
+    - Повторяющиеся n-граммы (одна 4-грамма занимает >35% текста)
+    - Длинные последовательности имён, не относящихся к тексту
+    """
+    if not text or len(text) < 200:
+        return False
+    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    if len(lines) >= min_lines:
+        from collections import Counter
+        line_counts = Counter(lines)
+        most_common_count = line_counts.most_common(1)[0][1]
+        if most_common_count / len(lines) > 0.60:
+            return True
+
+    # 4-gram repetition detection
+    words = text.lower().split()
+    if len(words) >= 20:
+        from collections import Counter
+        ngrams = [" ".join(words[i:i+4]) for i in range(len(words) - 3)]
+        if ngrams:
+            ngram_counts = Counter(ngrams)
+            top_count = ngram_counts.most_common(1)[0][1]
+            if top_count / len(ngrams) > 0.35:
+                return True
+
+    return False
+
+
 def call_llm(
     client: OpenAI,
     config: Config,
@@ -2214,11 +2488,12 @@ def call_llm(
     response_format: Optional[Any] = None,
     log_prefix: str = "",
     temperature: Optional[float] = None,
+    model_override: Optional[str] = None,
 ) -> Optional[str]:
     """Вызов LLM. Автоматически использует нативный API ollama если доступен."""
     trace_id = next_llm_trace_id(log_prefix)
     if _use_ollama_native:
-        return call_llm_ollama_native(
+        result = call_llm_ollama_native(
             config,
             system,
             user,
@@ -2227,9 +2502,10 @@ def call_llm(
             log_prefix=log_prefix,
             temperature=temperature,
             trace_id=trace_id,
+            model_override=model_override,
         )
     else:
-        return call_llm_openai(
+        result = call_llm_openai(
             client,
             config,
             system,
@@ -2239,7 +2515,27 @@ def call_llm(
             log_prefix=log_prefix,
             temperature=temperature,
             trace_id=trace_id,
+            model_override=model_override,
         )
+
+    if result and looks_like_degenerate_output(result):
+        if log_prefix:
+            log_event(f"{log_prefix} DEGENERATE OUTPUT detected ({len(result)} chars), discarding")
+        return None
+
+    return result
+
+
+def get_model_for_role(config: Config, role: str) -> str:
+    """Возвращает модель для конкретной роли пайплайна."""
+    role_map = {
+        "knowledge_extract": strip_text(getattr(config, "knowledge_extract_model", "")),
+        "knowledge_extract_secondary": strip_text(getattr(config, "knowledge_extract_model_secondary", "")),
+        "knowledge_validate": strip_text(getattr(config, "knowledge_validate_model", "")),
+        "knowledge_link": strip_text(getattr(config, "knowledge_link_model", "")),
+        "knowledge_arbiter": strip_text(getattr(config, "knowledge_arbiter_model", "")),
+    }
+    return role_map.get(role, "") or config.model
 
 
 # ──────────────────────────────────────────────
@@ -2799,6 +3095,21 @@ def dialogue_item_key(item: dict) -> str:
     return text_hash(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
 
+def knowledge_item_key(item: dict) -> str:
+    """Ключ для щадящей дедупликации фактов между page/track-проходами."""
+    payload = {
+        "category": normalize_dedup_text(item.get("category", "")),
+        "subject": normalize_subject_for_dedup(item.get("subject", "")),
+        "fact": normalize_dedup_text(item.get("fact", "")),
+        "time_scope": normalize_time_scope(
+            item.get("time_scope", ""),
+            fact=strip_text(item.get("fact", "")),
+            category=strip_text(item.get("category", "")),
+        ),
+    }
+    return text_hash(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+
 def merge_dialogue_items(existing: list[dict], new_items: list[dict]) -> tuple[list[dict], int]:
     """Добавляет в список только новые реплики, сохраняя порядок."""
     merged = list(existing)
@@ -2817,10 +3128,182 @@ def merge_dialogue_items(existing: list[dict], new_items: list[dict]) -> tuple[l
 
 
 def merge_knowledge_items(existing: list[dict], new_items: list[dict]) -> tuple[list[dict], int]:
-    """Добавляет в список только новые факты, схлопывая дубли между page-проходами."""
-    merged = deduplicate_knowledge(existing + new_items)
-    added = max(len(merged) - len(deduplicate_knowledge(existing)), 0)
+    """Добавляет в список только новые факты между page/track-проходами.
+
+    Использует точный hash + fuzzy-проверку (subjects_look_duplicate + facts_look_duplicate),
+    чтобы модель не добавляла перефразировки одного и того же факта.
+    """
+    merged = list(existing)
+    seen = {knowledge_item_key(item) for item in existing}
+    added = 0
+
+    for item in new_items:
+        item_key = knowledge_item_key(item)
+        if item_key in seen:
+            continue
+
+        # Fuzzy-проверка: ищем дубль среди existing с тем же subject
+        new_subject = strip_text(item.get("subject", ""))
+        new_fact = strip_text(item.get("fact", ""))
+        is_fuzzy_dup = False
+        if new_subject and new_fact:
+            for ex in existing:
+                ex_subject = strip_text(ex.get("subject", ""))
+                ex_fact = strip_text(ex.get("fact", ""))
+                if not ex_subject or not ex_fact:
+                    continue
+                if subjects_look_duplicate(new_subject, ex_subject):
+                    if not time_scopes_meaningfully_differ(item, ex) and facts_look_duplicate(new_fact, ex_fact):
+                        is_fuzzy_dup = True
+                        break
+
+        if is_fuzzy_dup:
+            continue
+
+        seen.add(item_key)
+        merged.append(item)
+        added += 1
+
     return merged, added
+
+
+def knowledge_items_semantically_equivalent(left: dict, right: dict) -> bool:
+    """Проверяет, описывают ли два candidate-item один и тот же факт."""
+    if not isinstance(left, dict) or not isinstance(right, dict):
+        return False
+
+    left_category = strip_text(left.get("category", ""))
+    right_category = strip_text(right.get("category", ""))
+    if not left_category or left_category != right_category:
+        return False
+    if time_scopes_meaningfully_differ(left, right):
+        return False
+
+    if knowledge_item_key(left) == knowledge_item_key(right):
+        return True
+
+    left_subject = strip_text(left.get("subject", ""))
+    right_subject = strip_text(right.get("subject", ""))
+    left_fact = strip_text(left.get("fact", ""))
+    right_fact = strip_text(right.get("fact", ""))
+    if not left_subject or not right_subject or not left_fact or not right_fact:
+        return False
+
+    return (
+        subjects_look_duplicate(left_subject, right_subject)
+        and facts_look_duplicate(left_fact, right_fact)
+    )
+
+
+def knowledge_item_quality_score(item: dict, primary_chunk: str = "") -> float:
+    """Грубая эвристика качества fact-item для выбора лучшей версии между моделями."""
+    if not isinstance(item, dict):
+        return -1.0
+
+    category = strip_text(item.get("category", ""))
+    subject = strip_text(item.get("subject", ""))
+    fact = strip_text(item.get("fact", ""))
+    evidence = strip_text(item.get("evidence", ""))
+    time_scope = normalize_time_scope(
+        item.get("time_scope", ""),
+        fact=fact,
+        category=category,
+    )
+
+    score = 0.0
+    score += min(len(subject), 48) / 48.0
+    score += min(len(fact), 220) / 80.0
+
+    if time_scope and time_scope not in {"unclear"}:
+        score += 0.25
+    if evidence:
+        score += 0.4
+
+    if primary_chunk:
+        if subject_tokens_grounded_in_source(subject, primary_chunk, category):
+            score += 1.5
+        if fact_tokens_grounded_in_primary(fact, primary_chunk, category=category, subject=subject):
+            score += 2.0
+
+    if not generic_fact_looks_placeholder(fact, category, subject):
+        score += 0.5
+    if not fact_looks_too_local_for_knowledge(fact, category, subject):
+        score += 0.5
+
+    return score
+
+
+def choose_preferred_knowledge_item(left: dict, right: dict, primary_chunk: str = "") -> dict:
+    """Выбирает лучшую формулировку факта из двух близких вариантов."""
+    left_score = knowledge_item_quality_score(left, primary_chunk=primary_chunk)
+    right_score = knowledge_item_quality_score(right, primary_chunk=primary_chunk)
+    if right_score > left_score:
+        return dict(right)
+    return dict(left)
+
+
+def merge_knowledge_extractor_outputs(
+    primary_items: list[dict],
+    secondary_items: list[dict],
+    *,
+    primary_chunk: str = "",
+) -> tuple[list[dict], list[dict]]:
+    """Объединяет результаты двух extractor-моделей.
+
+    Возвращает:
+    - agreed_items: факты, где модели по сути согласились
+    - unresolved_items: одиночные или конфликтующие кандидаты для арбитра
+    """
+    agreed_items: list[dict] = []
+    unresolved_items: list[dict] = []
+    used_secondary: set[int] = set()
+
+    for primary_item in primary_items:
+        match_idx = None
+        for idx, secondary_item in enumerate(secondary_items):
+            if idx in used_secondary:
+                continue
+            if knowledge_items_semantically_equivalent(primary_item, secondary_item):
+                match_idx = idx
+                break
+
+        if match_idx is None:
+            item = dict(primary_item)
+            item["_ensemble_source"] = "primary"
+            unresolved_items.append(item)
+            continue
+
+        used_secondary.add(match_idx)
+        agreed = choose_preferred_knowledge_item(
+            primary_item,
+            secondary_items[match_idx],
+            primary_chunk=primary_chunk,
+        )
+        agreed_items, _ = merge_knowledge_items(agreed_items, [agreed])
+
+    for idx, secondary_item in enumerate(secondary_items):
+        if idx in used_secondary:
+            continue
+        item = dict(secondary_item)
+        item["_ensemble_source"] = "secondary"
+        unresolved_items.append(item)
+
+    deduped_unresolved: list[dict] = []
+    for item in unresolved_items:
+        deduped_unresolved, _ = merge_knowledge_items(deduped_unresolved, [item])
+
+    return agreed_items, deduped_unresolved
+
+
+def strip_internal_knowledge_fields(item: dict) -> dict:
+    """Удаляет служебные поля, которые не должны попадать в финальную knowledge base."""
+    if not isinstance(item, dict):
+        return {}
+    return {
+        key: value
+        for key, value in item.items()
+        if not str(key).startswith("_")
+    }
 
 
 def format_previous_dialogues_for_prompt(items: list[dict], limit: int = 24) -> str:
@@ -2871,17 +3354,597 @@ def make_dialogue_pagination_note(pass_idx: int, extracted: list[dict]) -> str:
     )
 
 
-def make_knowledge_pagination_note(pass_idx: int, extracted: list[dict]) -> str:
+def make_knowledge_pagination_note(pass_idx: int, extracted: list[dict], track_name: str = "") -> str:
     """Инструкция для добора новых фактов на следующем проходе."""
     if pass_idx <= 0 or not extracted:
         return ""
     already = format_previous_knowledge_for_prompt(extracted)
+    track_hint = f" в треке {track_name.upper()}" if track_name else ""
     return (
-        f"\n\nЭТО ПРОХОД #{pass_idx + 1}. Ниже уже найденные факты, их повторять нельзя.\n"
+        f"\n\nЭТО ПРОХОД #{pass_idx + 1}{track_hint}. Ниже уже найденные факты, их повторять нельзя.\n"
         "Найди НОВЫЕ факты и события из PRIMARY CHUNK, которые ещё не попали в список.\n"
         "УЖЕ ИЗВЛЕЧЕНО:\n"
         f"{already}"
     )
+
+
+KNOWLEDGE_EXTRACTION_TRACKS = {
+    "world": {
+        "title": "WORLD_FACTS",
+        "instruction": (
+            "MODE: WORLD_FACTS.\n"
+            "Ищи только именованные сущности и устойчивые знания: кто кто, что где, как устроено, какие есть роли,\n"
+            "отношения, свойства мест, правила мира, магия, устойчивые предметы и институты.\n"
+            "PRIORITY: precision first. Лучше вернуть меньше фактов, чем добавить шум.\n"
+            "Если исходный текст — первое лицо или рассказ о переживаниях, переводи его в прямой факт о мире или персонаже,\n"
+            "а не в формулу `X — персонаж, который...`.\n"
+            "Если текст описывает социальную норму, правило этикета, обычай или закон мира\n"
+            "(например, «в Соединённом Королевстве допустимо только между ближайшими друзьями»),\n"
+            "выделяй это как отдельный факт с subject = название правила, места или института,\n"
+            "а не приписывай конкретному персонажу, упомянутому в сцене.\n"
+            "Не извлекай bare role-subject и общие ярлыки вроде `Король`, `Леди`, `Генерал`, `Магистр`,\n"
+            "`Посыльный`, если из текста нельзя назвать сущность точнее.\n"
+            "Не извлекай расплывчатые summary и догадки: `упоминается в контексте`, `видимо`, `возможно`,\n"
+            "`может быть`, `не раскрывается`, `был в курсе событий`.\n"
+            "Не дроби сцену на микрореакции и мелкие жесты."
+        ),
+    },
+    "scene": {
+        "title": "SCENE_FACTS",
+        "instruction": (
+            "MODE: SCENE_FACTS.\n"
+            "Ищи только события и изменения состояния с последствиями: встречи, приказы, решения, открытия,\n"
+            "угрозы, перемещения, смену статуса, важные эмоциональные сдвиги и причинно-следственные связи.\n"
+            "Из одной насыщенной сцены можно взять несколько атомарных событий.\n"
+            "Извлекай только то, что изменило знания, статус, планы, отношения или дальнейший ход событий.\n"
+            "Описывай событие как проверяемое изменение состояния, а не как туманную формулу `кто-то был в центре внимания`\n"
+            "или `кто-то был в состоянии, когда...`.\n"
+            "Не превращай в факты обычную болтовню, рутину, еду без последствий, каждую отдельную реплику,\n"
+            "впечатление, настроение или summary вида `кто-то был в центре внимания`."
+        ),
+    },
+}
+
+
+def iter_knowledge_extraction_tracks(config: Config) -> list[tuple[str, dict[str, str]]]:
+    """Возвращает валидный и уникальный список knowledge-треков."""
+    configured_tracks = getattr(config, "knowledge_extraction_tracks", ()) or ()
+    if not configured_tracks:
+        configured_tracks = ("world", "scene")
+
+    resolved: list[tuple[str, dict[str, str]]] = []
+    seen = set()
+    for raw_track in configured_tracks:
+        track_name = strip_text(raw_track).lower()
+        if not track_name or track_name in seen:
+            continue
+        track_spec = KNOWLEDGE_EXTRACTION_TRACKS.get(track_name)
+        if track_spec is None:
+            continue
+        seen.add(track_name)
+        resolved.append((track_name, track_spec))
+
+    if not resolved:
+        return [("world", KNOWLEDGE_EXTRACTION_TRACKS["world"])]
+
+    return resolved
+
+
+def build_knowledge_extraction_prompt(
+    config: Config,
+    *,
+    chunk_payload: str,
+    track_spec: dict[str, str],
+    page_max_items: int,
+    pagination_note: str,
+) -> tuple[str, Optional[Any], str]:
+    """Возвращает prompt и ожидаемый формат ответа для extraction."""
+    protocol = strip_text(getattr(config, "knowledge_extraction_protocol", "")).lower() or "lines"
+    prompt_kwargs = {
+        "chunk_payload": chunk_payload,
+        "track_title": track_spec["title"],
+        "track_instruction": track_spec["instruction"],
+        "page_max_items": page_max_items,
+        "pagination_note": pagination_note,
+    }
+    if protocol == "json":
+        return (
+            KNOWLEDGE_PROMPT_V2.format(**prompt_kwargs),
+            "json" if _use_ollama_native else None,
+            "json",
+        )
+    return (
+        KNOWLEDGE_LINE_PROMPT_V3.format(**prompt_kwargs),
+        None,
+        "lines",
+    )
+
+
+def generic_fact_looks_placeholder(fact: str, category: str = "", subject: str = "") -> bool:
+    """Опознаёт бессодержательные описания сущности вместо реального факта."""
+    normalized = normalize_dedup_text(fact)
+    normalized_subject = normalize_dedup_text(subject)
+    if not normalized:
+        return True
+    if normalized_subject and normalized == normalized_subject:
+        return True
+    if normalized_subject and normalized.startswith(f"{normalized_subject} это "):
+        return True
+
+    generic_patterns = [
+        r"^главн(ый|ая) геро(й|иня)\b",
+        r"^место действия\b",
+        r"^персонаж[, ]+котор(ый|ая|ое)\b",
+        r"^персонаж[, ]+котор(ый|ая|ое).+сцен",
+        r"\bэто персонаж[, ]+котор(ый|ая|ое)",
+        r"^место[, ]+где.+происходят события",
+        r"^место[, ]+в котором.+происходят события",
+        r"^объект[, ]+котор(ый|ая|ое).+упомина",
+        r"^сущность[, ]+котор(ая|ый|ое)",
+        r"^персонаж[, ]+котор(ый|ая|ое).+присутств",
+        r"^место[, ]+котор(ое|ый).+упомина",
+        r"^действие[, ]+котор(ое|ый)\b",
+        r"^действия[, ]+в (сцене|тексте)\b",
+        r"^это место[, ]+где",
+        r"^это предмет[, ]+котор",
+        r"^это предмет гардероба[, ]+котор",
+        r"^это напиток[, ]+котор",
+        r"^это вино[, ]+котор",
+        r"^это заведение[, ]+где",
+        r"^это одно из заведений",
+        r"^это территория[, ]+котор",
+        r"^это миф[, ]+то[, ]+чего нет",
+        r"\bявля(ется|ются) местом действия\b",
+        r"\bявля(ется|ются) местом, где\b",
+        r"^в тексте не упоминается\b",
+        r"^не упоминается в данном отрывке\b",
+        r"^описани[ея] отсутствует\b",
+        r"^не может быть определен\b",
+        r"^не указан конкретный персонаж\b",
+        r"^предмет[, ]+котор(ый|ая|ое)\b",
+        r"^один из них\b",
+        r"^другой\b",
+        r"^упоминается в контексте\b",
+        r"^упоминание о\b",
+        r"^событие[, ]+связанное с\b",
+        r"^место[, ]+связанное с\b",
+        r"^персонаж[, ]+связанный с\b",
+        r"^важность\b.+\bдля героя\b",
+        r"^появление\b.+\bкоторые окружают\b",
+        r"\bв данной сцене\b",
+        r"\bпо видимому\b",
+        r"\bисточник шума или внимания\b",
+    ]
+    for pattern in generic_patterns:
+        if re.match(pattern, normalized):
+            return True
+
+    generic_search_patterns = [
+        r"\bэто персонаж[, ]+котор(ый|ая|ое)",
+        r"\bперсонаж[, ]+котор(ый|ая|ое)\b",
+        r"\bявляется персонажем[, ]+котор",
+        r"\bв данной сцене\b",
+        r"\bпо видимому\b",
+        r"\bисточник шума или внимания\b",
+        r"\bвероятно[, ]+имеется в виду\b",
+        r"\bв тексте не упоминается\b",
+        r"\bне упоминается в данном отрывке\b",
+        r"\bописани[ея] отсутствует\b",
+        r"\bне раскрывается\b",
+        r"\bв курсе событий\b",
+        r"\bможет быть\b",
+        r"\bвозможно\b",
+        r"\bпредполагается\b",
+        r"\bисточником информации\b",
+        r"\bисточником информации или события\b",
+        r"\bв центре внимания\b",
+        r"\bв состоянии[, ]+когда\b",
+        r"\bв процессе повествования\b",
+        r"\bпроисходит действие\b",
+        r"\bпо мнению рассказчика\b",
+        r"\bв какой то момент\b",
+        r"\bв роли\b",
+        r"\bместо[, ]+связанное с\b",
+        r"\bсобытие[, ]+связанное с\b",
+        r"\bпредметом обсуждения\b",
+        r"\bпредмет[, ]+который был замечен\b",
+        r"\bодин из них\b",
+    ]
+    for pattern in generic_search_patterns:
+        if re.search(pattern, normalized):
+            return True
+
+    if category == "character" and normalized in {
+        "персонаж который присутствует в сцене",
+        "персонаж упомянутый в сцене",
+    }:
+        return True
+    if category == "place" and normalized in {
+        "место где происходят события",
+        "место в котором происходят события",
+    }:
+        return True
+    if category == "event" and normalized in {
+        "действие которое совершает макс чтобы отвлечь внимание",
+        "действие которое совершает герой чтобы отвлечь внимание",
+    }:
+        return True
+
+    return False
+
+
+def subject_tokens_grounded_in_source(subject: str, source_text: str, category: str = "") -> bool:
+    """Проверяет, что subject опирается на текущий текст, а не выдуман моделью."""
+    normalized_source = normalize_dedup_text(source_text)
+    if not normalized_source:
+        return True
+
+    normalized_subject = normalize_subject_for_dedup(subject)
+    if not normalized_subject:
+        return False
+
+    if normalized_subject in {"макс", "макс фрай"}:
+        if re.search(r"\b(я|мне|меня|мой|моя|мое|моё|мои|мы|нас|нам)\b", normalized_source):
+            return True
+
+    source_padded = f" {normalized_source} "
+    if f" {normalized_subject} " in source_padded:
+        return True
+
+    grounding_keys = grounding_keys_from_text(normalized_source)
+    if not grounding_keys:
+        return True
+
+    tokens = subject_content_tokens(subject, category=category)
+    if not tokens:
+        return False
+
+    overlap = sum(1 for token in tokens if token_matches_grounding(token, grounding_keys))
+    if len(tokens) == 1:
+        return overlap == 1
+    if len(tokens) == 2:
+        return overlap >= 1
+    return overlap >= 2
+
+
+_GROUND_TOKEN_SUFFIXES = (
+    "иями", "ями", "ами", "ием", "иеми", "иях", "ях", "ах",
+    "ого", "ему", "ому", "ыми", "ими", "ыми", "его", "ого",
+    "ий", "ый", "ой", "ая", "яя", "ое", "ее", "ые", "ие",
+    "ым", "им", "ом", "ем", "ам", "ям", "ов", "ев", "ей",
+    "ою", "ею", "ую", "юю", "ия", "ья", "ью", "ию",
+    "у", "ю", "а", "я", "ы", "и", "е", "о",
+)
+
+
+def ground_token_key(token: str) -> str:
+    """Грубо схлопывает русские словоформы до устойчивого ключа для grounding."""
+    token = normalize_dedup_text(token)
+    if not token:
+        return ""
+    if len(token) <= 4:
+        return token
+
+    for suffix in _GROUND_TOKEN_SUFFIXES:
+        if token.endswith(suffix) and len(token) - len(suffix) >= 4:
+            return token[: -len(suffix)]
+    return token
+
+
+def grounding_keys_from_text(text: str) -> set[str]:
+    """Строит набор точных и упрощённых токенов текста для проверки grounding."""
+    keys: set[str] = set()
+    for token in dedup_word_tokens(text):
+        if len(token) < 3:
+            continue
+        keys.add(token)
+        reduced = ground_token_key(token)
+        if len(reduced) >= 4:
+            keys.add(reduced)
+    return keys
+
+
+def token_matches_grounding(token: str, grounding_keys: set[str]) -> bool:
+    """Проверяет совпадение токена по точной форме или упрощённому stem-ключу."""
+    normalized = normalize_dedup_text(token)
+    if not normalized or len(normalized) < 3:
+        return False
+    if normalized in grounding_keys:
+        return True
+    reduced = ground_token_key(normalized)
+    return len(reduced) >= 4 and reduced in grounding_keys
+
+
+def subject_content_tokens(subject: str, category: str = "") -> list[str]:
+    """Значимые токены subject без титулов и слишком общих сущностных слов."""
+    ignored_tokens = set(_FACT_STOPWORDS) | set(_SUBJECT_PREFIX_NOISE)
+    if category == "place":
+        ignored_tokens |= set(_GENERIC_PLACE_BUNDLE_TOKENS)
+        ignored_tokens |= set(_PLACE_HEADWORD_CANONICAL.values())
+
+    return [
+        token
+        for token in dedup_word_tokens(subject)
+        if len(token) >= 3 and token not in ignored_tokens
+    ]
+
+
+def leading_fact_content_tokens(fact: str, limit: int = 4) -> list[str]:
+    """Первые значимые токены факта без стартовых титулов и служебных слов."""
+    tokens = dedup_word_tokens(fact)
+    significant: list[str] = []
+    for token in tokens:
+        if token in _FACT_STOPWORDS or token in _CHARACTER_HONORIFICS:
+            continue
+        significant.append(token)
+        if len(significant) >= limit:
+            break
+    return significant
+
+
+def fact_anchor_matches_subject(fact: str, subject: str, category: str = "") -> bool:
+    """Проверяет, что факт действительно сформулирован вокруг своего subject."""
+    if category not in {"character", "creature", "magic", "event"}:
+        return True
+
+    subject_tokens = subject_content_tokens(subject, category=category)
+    if not subject_tokens:
+        return True
+
+    leading_tokens = leading_fact_content_tokens(fact, limit=4)
+    if not leading_tokens:
+        return True
+
+    subject_keys = {ground_token_key(token) for token in subject_tokens if ground_token_key(token)}
+    for token in leading_tokens[:2]:
+        if ground_token_key(token) in subject_keys:
+            return True
+
+    subject_canonical = lookup_canonical_character(subject) or normalize_subject_for_dedup(subject)
+    for width in (3, 2, 1):
+        if len(leading_tokens) < width:
+            continue
+        candidate = " ".join(leading_tokens[:width])
+        candidate_canonical = lookup_canonical_character(candidate)
+        if candidate_canonical and candidate_canonical != subject_canonical:
+            return False
+
+    return True
+
+
+def fact_tokens_grounded_in_primary(
+    fact: str,
+    primary_text: str,
+    *,
+    category: str = "",
+    subject: str = "",
+) -> bool:
+    """Проверяет, что смысловые токены факта опираются именно на PRIMARY CHUNK."""
+    normalized_primary = normalize_dedup_text(primary_text)
+    if not normalized_primary:
+        return True
+
+    grounding_keys = grounding_keys_from_text(normalized_primary)
+    if not grounding_keys:
+        return True
+
+    fact_tokens = content_tokens_for_fact(fact)
+    if not fact_tokens:
+        return True
+
+    subject_tokens = set(subject_content_tokens(subject, category=category))
+    anchor_tokens = [token for token in fact_tokens if token not in subject_tokens]
+    if not anchor_tokens:
+        anchor_tokens = list(fact_tokens)
+
+    overlap = sum(1 for token in anchor_tokens if token_matches_grounding(token, grounding_keys))
+    token_count = len(anchor_tokens)
+
+    if token_count == 1:
+        return overlap == 1
+    if token_count == 2:
+        return overlap >= 2
+    if token_count <= 4:
+        return overlap >= 2
+    if category == "event":
+        return overlap >= max(2, token_count // 3)
+    return overlap >= max(2, (token_count + 1) // 2)
+
+
+def fact_looks_too_local_for_knowledge(fact: str, category: str = "", subject: str = "") -> bool:
+    """Отсеивает слишком локальные сценические факты, не полезные вне ситуации."""
+    normalized = normalize_dedup_text(fact)
+    subject_norm = normalize_dedup_text(subject)
+    if not normalized:
+        return True
+
+    if subject_norm in {"два друга", "два персонажа", "действие", "действия"}:
+        return True
+
+    if re.search(r"\b(в тексте не упоминается|описани[ея] отсутствует)\b", normalized):
+        return True
+
+    if re.search(r"\b(предметом обсуждения|упоминание о)\b", normalized):
+        return True
+    if re.search(
+        r"\b(упоминается в контексте|не раскрывается|в курсе событий|может быть|возможно|предполагается|"
+        r"источником информации|источником информации или события|в центре внимания|в процессе повествования|"
+        r"в состоянии[, ]+когда|не может быть определен|по мнению рассказчика|в какой то момент)\b",
+        normalized,
+    ):
+        return True
+    if re.search(
+        r"\b(местом действия|курс\w* адаптац\w*|интенсивн\w* курс\w* адаптац\w*|"
+        r"осваива\w* в новом мире|начинает привыкать к новой жизни|"
+        r"катализатор\w* изменени\w* привычек|помощ\w* в трудоустройств\w*)\b",
+        normalized,
+    ):
+        return True
+
+    if category == "character":
+        weak_character_patterns = [
+            r"\bудивил(ся|ась|ось)?\b.+\bспрос",
+            r"\bспросил[аи]?\b",
+            r"\bпосоветовал[аи]?\b",
+            r"\bведет себя так будто\b",
+            r"\bне смог понять что происходит\b",
+            r"\bрешил это объяснить\b",
+            r"\bрешил объяснить\b",
+            r"^один из них\b",
+            r"\bдругой\b",
+            r"\bявляется персонажем[, ]+котор",
+            r"\bперсонажем[, ]+котор",
+            r"\bбыл в курсе событий\b",
+            r"\bв центре внимания\b",
+            r"\bв процессе повествования\b",
+            r"\bв состоянии[, ]+когда\b",
+            r"\bпо мнению рассказчика\b",
+            r"\bв какой то момент\b",
+            # Микродействия и рутина
+            r"\bпереоде(лся|лась|ться)\b",
+            r"\bпереодеть\b",
+            r"\bпомог.+переодеться\b",
+            r"\bбыл переодет\b",
+            r"\bменяет.+туфли\b",
+            r"\bменяет.+мокасины\b",
+            r"\bменяет.+обувь\b",
+            r"\bпрактиковался в (имитации|приеме пищи)\b",
+            r"\bимитируя действия\b",
+            r"\bнаблюдая за.+учител",
+            r"\bстал проводником.+по дому\b",
+            r"\bбыл озадачен\b.+\bвидом\b",
+            r"\bбыл озадачен\b.+\bпри встрече\b",
+            r"\bстал катализатором\b",
+            r"\bпроявляет слабость к\b",
+            r"\bосваива\w* в новом мире\b",
+            r"\bпривык\w* к новой жизни\b",
+            r"\bкурс\w* адаптац\w*\b",
+            r"\bкатализатор\w* изменени\w*\b",
+            r"\bпомощ\w* в трудоустройств\w*\b",
+            r"\bзаявил[, ]+что\b",
+            r"\bзаявляет[, ]+что\b",
+            r"\bназвал\b.+\bглавн\w* спасител\w*\b",
+            r"\bприказал\b.+\bехать\b",
+            r"\bприказал\b.+\bотправитьс[яь]\b",
+            r"\bприказал\b.+\bпосетить\b",
+            r"\bнастоял\b.+\bусвоил\b",
+            r"\bунес\b.+\bпод мышк\w*\b",
+            r"\bбудет коллекционировать амобилер\w*\b",
+            r"\bкаждый нищий кочевник\b",
+            r"\bлонки ломки\b",
+            r"\bпроизносить как лонки ломки\b",
+            r"\bбыл строго предупрежден\b",
+            r"\bвстретить\b.+\bпо первому разряду\b",
+            r"\bпомог\b.+\bодеть",
+            r"\bпомог\b.+\bодеться\b",
+            r"\bвыглядел пристойно\b",
+            r"\bсостоит из десятка букв\b",
+            r"\bзапомнить его фамилию\b",
+            r"\bбыл назван\b.+\bлихим ветром\b",
+            r"\bпитал к\b.+\bслабость\b",
+        ]
+        for pattern in weak_character_patterns:
+            if re.search(pattern, normalized):
+                return True
+
+    if category == "place":
+        weak_place_patterns = [
+            r"^в центре\b",
+            r"^посреди\b",
+            r"\bстоял\b",
+            r"\bстояла\b",
+            r"\bстояло\b",
+            r"\bстояли\b",
+            r"\bпроизрастал\b",
+            r"\bпроизрастала\b",
+            r"\bобнаружил\b",
+            r"\bопределил направление\b",
+        ]
+        if subject_norm in _GENERIC_PLACE_SUBJECTS:
+            return True
+        if subject_norm in {"гостиная", "кабинет", "комната", "зал", "спальня", "кухня", "сад", "двор", "дом", "улица"}:
+            for pattern in weak_place_patterns:
+                if re.search(pattern, normalized):
+                    return True
+        if subject_norm in {"сарайчик", "стол"}:
+            return True
+
+    if category == "magic" and subject_norm == "безмолвная речь":
+        weak_magic_patterns = [
+            r"\bпередал[аио]?\b.+\bмакс",
+            r"\bпередала максу\b",
+            r"\bсобак[аи]\b.+\bпередал[аио]?\b",
+            r"\bсказал[аи]?\b.+\bпо безмолвн",
+        ]
+        for pattern in weak_magic_patterns:
+            if re.search(pattern, normalized):
+                return True
+
+    if category == "custom":
+        weak_custom_patterns = [
+            r"\bпредметом обсуждения\b",
+            r"\bвероятно[, ]+имеется в виду\b",
+            r"\bносил убитый\b",
+            r"\bописание отсутствует\b",
+            r"\bобъект[, ]+который может быть связан\b",
+            r"\bместо[, ]+где происходит действие\b",
+        ]
+        for pattern in weak_custom_patterns:
+            if re.search(pattern, normalized):
+                return True
+
+    if category == "event":
+        weak_event_subject_patterns = [
+            r"^(обед|завтрак|ужин)\b",
+            r".+\bподвиг\b",
+            r"^действие\b",
+            r"^действия\b",
+        ]
+        for pattern in weak_event_subject_patterns:
+            if re.match(pattern, subject_norm):
+                return True
+
+        weak_event_patterns = [
+            r"\bудивил(ся|ась|ось)?\b.+\bспрос",
+            r"\bспросил[аи]?\b",
+            r"\bотправил(?:ся|ась|ись)\b.+\b(обедать|завтракать|ужинать)\b",
+            r"\bпош(?:ел|ёл|ла|ли)\b.+\b(обедать|завтракать|ужинать)\b",
+            r"\bрассказал[аи]?\b.+\bо сво(?:ем|ём)\b",
+            r"^действие[, ]+котор",
+            r"\bв сцене упоминается\b",
+            # Рутинные микродействия
+            r"\bменяет.+туфли\b",
+            r"\bменяет.+мокасины\b",
+            r"\bпереоде(лся|лась|ться)\b",
+            r"\bпрактиковался в (имитации|приеме пищи)\b",
+            r"\bнаблюдая за.+учител",
+            r"\bвпервые едет\b",
+            r"\bпроходит экзамен на водительские\b",
+            r"\bимитируя действия\b",
+            # Пересказ шуток и заявлений без последствий
+            r"\bзаявляет[, ]+что будет коллекционировать\b",
+            r"\bзаявляет[, ]+что\b",
+            r"\bзаявляет[, ]+что.+будет служить ему\b",
+            r"\bпокидают место происшествия[, ]+чтобы\b",
+            r"\bпризнает[, ]+что его действия\b",
+            r"\bунес\b.+\bпод мышк\w*\b",
+            r"\bприказывает\b.+\bотправитьс[яь]\b",
+            r"\bприказывает\b.+\bехать\b",
+            r"\bприказывает\b.+\bпосетить\b",
+            r"\bприказал\b.+\bотправитьс[яь]\b",
+            r"\bприказал\b.+\bехать\b",
+            r"\bприказал\b.+\bпосетить\b",
+            r"\bназвал\b.+\bглавн\w* спасител\w*\b",
+            r"\bбыл признан\b.+\bглавн\w* спасител\w*\b",
+            r"\bназвал\b.+\bлихим ветром\b",
+            r"\bназвал\b.+\bураганом\b",
+            r"\bбыл назван\b.+\bлихим ветром\b",
+        ]
+        for pattern in weak_event_patterns:
+            if re.search(pattern, normalized):
+                return True
+
+    return False
 
 
 def extract_voice_with_regex(chunk: str, log_prefix: str = "") -> tuple[list[dict], dict]:
@@ -3093,44 +4156,50 @@ def extract_dialogues(
     extracted: list[dict] = []
 
     for pass_idx in range(max(config.extraction_passes, 1)):
-        response = call_llm(
-            client,
-            config,
-            EXTRACT_SYSTEM,
-            EXTRACT_PROMPT.format(
-                chunk_payload=payload,
-                pagination_note=make_dialogue_pagination_note(pass_idx, extracted),
-            ),
-            max_tokens=config.max_tokens_extract,
-            response_format="json" if _use_ollama_native else None,
-            log_prefix=f"{log_prefix}[page {pass_idx + 1}]" if log_prefix else "",
-        )
-
-        if response is None:
-            break
-
-        data, strategy = parse_json_response(
-            response,
-            expect="array",
-            log_prefix=f"{log_prefix}[page {pass_idx + 1}]" if log_prefix else "",
-        )
-        if not isinstance(data, list):
-            if log_prefix:
-                log_event(f"{log_prefix}[page {pass_idx + 1}] ответ не удалось распарсить как JSON-массив")
-            break
-
-        page_items = validate_dialogues(
-            data,
-            source_chunk=chunk,
-            log_prefix=f"{log_prefix}[page {pass_idx + 1}]" if log_prefix else "",
-        )
-        extracted, added = merge_dialogue_items(extracted, page_items)
-        if log_prefix:
-            log_event(
-                f"{log_prefix}[page {pass_idx + 1}] JSON ok: {len(data)} элементов "
-                f"({strategy}), новых={added}, накоплено={len(extracted)}"
+        page_prefix = f"{log_prefix}[page {pass_idx + 1}]" if log_prefix else ""
+        try:
+            response = call_llm(
+                client,
+                config,
+                EXTRACT_SYSTEM,
+                EXTRACT_PROMPT.format(
+                    chunk_payload=payload,
+                    pagination_note=make_dialogue_pagination_note(pass_idx, extracted),
+                ),
+                max_tokens=config.max_tokens_extract,
+                response_format="json" if _use_ollama_native else None,
+                log_prefix=page_prefix,
             )
-        if not page_items or added == 0:
+
+            if response is None:
+                break
+
+            data, strategy = parse_json_response(
+                response,
+                expect="array",
+                log_prefix=page_prefix,
+            )
+            if not isinstance(data, list):
+                if log_prefix:
+                    log_event(f"{page_prefix} ответ не удалось распарсить как JSON-массив")
+                break
+
+            page_items = validate_dialogues(
+                data,
+                source_chunk=chunk,
+                log_prefix=page_prefix,
+            )
+            extracted, added = merge_dialogue_items(extracted, page_items)
+            if log_prefix:
+                log_event(
+                    f"{page_prefix} JSON ok: {len(data)} элементов "
+                    f"({strategy}), новых={added}, накоплено={len(extracted)}"
+                )
+            if not page_items or added == 0:
+                break
+        except Exception as exc:
+            if log_prefix:
+                log_event(f"{page_prefix} ошибка обработки страницы диалогов: {exc}")
             break
 
     return extracted
@@ -3193,6 +4262,7 @@ def validate_dialogues(
     что max_says реально присутствует в исходном тексте (fuzzy)."""
     valid = []
     rejected = {
+        "bad_item_type": 0,
         "too_short": 0,
         "missing_type": 0,
         "invalid_type": 0,
@@ -3203,6 +4273,9 @@ def validate_dialogues(
     normalized_support_chunk = normalize_search_text(support_chunk) if support_chunk else ""
 
     for d in items:
+        if not isinstance(d, dict):
+            rejected["bad_item_type"] += 1
+            continue
         max_says = strip_text(d.get("max_says", ""))
         if len(max_says) < 15:
             rejected["too_short"] += 1
@@ -3260,17 +4333,319 @@ def validate_dialogues(
     return valid
 
 
-def validate_knowledge(items: list[dict], log_prefix: str = "") -> list[dict]:
+_KNOWLEDGE_FIELD_ALIASES = {
+    "category": ("category", "категория", "type", "тип", "role"),
+    "subject": ("subject", "субъект", "имя", "название", "объект", "entity", "name", "title", "event", "point", "character", "location"),
+    "fact": ("fact", "факт", "описание", "description", "details", "detail", "action", "summary"),
+    "time_scope": ("time_scope", "time", "время", "временная_метка", "временной_характер"),
+    "evidence": ("evidence", "опора", "цитата", "span", "evidence_span"),
+}
+
+_KNOWLEDGE_CATEGORY_ALIASES = {
+    "character": "character",
+    "персонаж": "character",
+    "person": "character",
+    "persona": "character",
+    "place": "place",
+    "место": "place",
+    "location": "place",
+    "location name": "place",
+    "location_name": "place",
+    "place name": "place",
+    "place_name": "place",
+    "region": "place",
+    "geography": "place",
+    "magic": "magic",
+    "магия": "magic",
+    "spell": "magic",
+    "history": "history",
+    "история": "history",
+    "epoch": "history",
+    "era": "history",
+    "period": "history",
+    "historical period": "history",
+    "historical_period": "history",
+    "event": "event",
+    "событие": "event",
+    "creature": "creature",
+    "существо": "creature",
+    "custom": "custom",
+    "быт": "custom",
+    "обычай": "custom",
+    "обычаи": "custom",
+    "item": "custom",
+    "object": "custom",
+    "artifact": "custom",
+    "institution": "custom",
+}
+
+
+def normalize_knowledge_schema_item(item: dict) -> dict:
+    """Нормализует схему факта, если модель вернула русские или альтернативные ключи."""
+    normalized: dict[str, Any] = {}
+
+    for target_key, aliases in _KNOWLEDGE_FIELD_ALIASES.items():
+        for alias in aliases:
+            if alias in item:
+                value = item.get(alias)
+                if target_key == "time_scope" or strip_text(value):
+                    normalized[target_key] = value
+                    break
+
+    if "category" in normalized:
+        category_key = normalize_dedup_text(strip_text(normalized["category"]))
+        normalized["category"] = _KNOWLEDGE_CATEGORY_ALIASES.get(
+            category_key,
+            strip_text(normalized["category"]).lower(),
+        )
+
+    for passthrough_key in ("source_book", "chapter", "chunk_idx"):
+        if passthrough_key in item:
+            normalized[passthrough_key] = item.get(passthrough_key)
+
+    return normalized
+
+
+_KNOWLEDGE_CONTAINER_CATEGORY_MAP = {
+    "characters": "character",
+    "character": "character",
+    "characters_analysis": "character",
+    "locations": "place",
+    "places": "place",
+    "items": "custom",
+    "objects": "custom",
+    "institutions": "custom",
+    "creatures": "creature",
+    "events": "event",
+    "key_events": "event",
+    "plot_points": "event",
+    "history": "history",
+    "magic": "magic",
+}
+
+_KNOWLEDGE_ROLE_CATEGORY_MAP = {
+    "character": "character",
+    "characters": "character",
+    "characters_analysis": "character",
+    "place": "place",
+    "places": "place",
+    "setting": "place",
+    "location": "place",
+    "item": "custom",
+    "items": "custom",
+    "custom": "custom",
+    "event": "event",
+    "events": "event",
+    "plot_points": "event",
+    "key_events": "event",
+    "history": "history",
+    "magic": "magic",
+}
+
+
+def build_knowledge_candidate_item(
+    category: str,
+    subject: str,
+    fact: str,
+    *,
+    time_scope: str = "",
+) -> Optional[dict]:
+    """Собирает кандидата knowledge из частично нормализованных полей."""
+    category = _KNOWLEDGE_CATEGORY_ALIASES.get(
+        normalize_dedup_text(category),
+        strip_text(category).lower(),
+    )
+    subject = strip_text(subject)
+    fact = strip_text(fact)
+    if not category or not subject or not fact:
+        return None
+    item = {
+        "category": category,
+        "subject": subject,
+        "fact": fact,
+    }
+    if strip_text(time_scope):
+        item["time_scope"] = strip_text(time_scope)
+    return item
+
+
+def coerce_knowledge_payload_to_items(
+    payload: Any,
+    *,
+    default_category: str = "",
+    log_prefix: str = "",
+) -> list[dict]:
+    """Пытается извлечь knowledge-кандидаты из типовых кривых LLM-схем."""
+    results: list[dict] = []
+
+    def add_item(category: str, subject: str, fact: str, time_scope: str = ""):
+        item = build_knowledge_candidate_item(
+            category,
+            subject,
+            fact,
+            time_scope=time_scope,
+        )
+        if item is not None and not generic_fact_looks_placeholder(
+            item["fact"],
+            item["category"],
+            item["subject"],
+        ):
+            results.append(item)
+
+    def normalized_node_keys(node: dict) -> set[str]:
+        return {normalize_dedup_text(str(key)) for key in node.keys()}
+
+    def is_weak_root_catalog_schema(node: dict, inherited_category: str) -> bool:
+        if inherited_category:
+            return False
+        keys = normalized_node_keys(node)
+        if "category" in keys or "категория" in keys:
+            return False
+        weak_signatures = (
+            {"entity", "type", "description"},
+            {"name", "description"},
+            {"subject", "type", "description"},
+        )
+        if not any(signature.issubset(keys) for signature in weak_signatures):
+            return False
+
+        description = strip_text(
+            node.get("description", "") or node.get("details", "") or node.get("detail", "")
+        )
+        category_hint = _KNOWLEDGE_CATEGORY_ALIASES.get(
+            normalize_dedup_text(strip_text(node.get("category", "") or node.get("type", ""))),
+            strip_text(node.get("category", "") or node.get("type", "")).lower(),
+        )
+        return not description or generic_fact_looks_placeholder(description, category_hint)
+
+    def extract_subject_fallback(node: dict, category: str) -> str:
+        preferred_keys = ["subject", "entity", "name", "title"]
+        if category == "event":
+            preferred_keys.extend(["event", "point"])
+        if category == "character":
+            preferred_keys.append("character")
+        if category == "place":
+            preferred_keys.append("location")
+
+        seen_keys = set()
+        for key in preferred_keys:
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            value = strip_text(node.get(key, ""))
+            if value:
+                return value
+        return ""
+
+    def extract_fact_fallback(node: dict, category: str) -> str:
+        fact = strip_text(node.get("fact", ""))
+        if fact:
+            return fact
+
+        details = strip_text(node.get("details", "") or node.get("detail", ""))
+        description = strip_text(node.get("description", ""))
+        action = strip_text(node.get("action", ""))
+
+        if action and details:
+            return f"{action} {details}"
+        if action and description:
+            return f"{action} {description}"
+        if category == "event" and action:
+            return action
+        if details:
+            return details
+        if description:
+            return description
+        return ""
+
+    def walk(node: Any, inherited_category: str = ""):
+        if isinstance(node, list):
+            for child in node:
+                walk(child, inherited_category)
+            return
+
+        if not isinstance(node, dict):
+            return
+
+        for container_key, container_category in _KNOWLEDGE_CONTAINER_CATEGORY_MAP.items():
+            if container_key in node:
+                walk(node.get(container_key), container_category)
+
+        role_key = normalize_dedup_text(strip_text(node.get("role", "") or node.get("type", "")))
+        if role_key in _KNOWLEDGE_ROLE_CATEGORY_MAP:
+            content = node.get("content")
+            if isinstance(content, list):
+                walk(content, _KNOWLEDGE_ROLE_CATEGORY_MAP[role_key])
+                return
+            # Строковый content у role-объектов почти всегда является сценическим summary.
+            if isinstance(content, str):
+                return
+
+        if is_weak_root_catalog_schema(node, inherited_category):
+            return
+
+        normalized_item = normalize_knowledge_schema_item(node)
+        category = normalized_item.get("category") or inherited_category
+        subject = normalized_item.get("subject", "")
+        fact = normalized_item.get("fact", "")
+        time_scope = normalized_item.get("time_scope", "")
+
+        if category and subject and fact:
+            add_item(category, subject, fact, time_scope)
+            return
+
+        if not category:
+            if "character" in node and any(strip_text(node.get(key, "")) for key in ("details", "detail", "description", "action")):
+                category = "character"
+            elif "location" in node and any(strip_text(node.get(key, "")) for key in ("details", "detail", "description")):
+                category = "place"
+            elif ("event" in node or "point" in node) and any(strip_text(node.get(key, "")) for key in ("details", "detail", "description", "action")):
+                category = "event"
+
+        if not category:
+            return
+
+        subject_fallback = subject or extract_subject_fallback(node, category)
+        fact_fallback = fact or extract_fact_fallback(node, category)
+
+        if subject_fallback and fact_fallback:
+            add_item(category, subject_fallback, fact_fallback, time_scope)
+
+    walk(payload, default_category)
+
+    if log_prefix and results:
+        log_event(f"{log_prefix} knowledge schema coerced: {len(results)} кандидатов")
+
+    return results
+
+
+def validate_knowledge(
+    items: list[dict],
+    log_prefix: str = "",
+    source_text: str = "",
+) -> list[dict]:
     """Фильтрует невалидные/мусорные записи из извлечённых фактов."""
     valid = []
+    primary_text = extract_primary_chunk_text(source_text)
     rejected = {
+        "bad_item_type": 0,
         "short_fact": 0,
         "short_subject": 0,
         "bad_category": 0,
+        "placeholder_subject": 0,
+        "ungrounded_subject": 0,
+        "ungrounded_fact": 0,
+        "subject_fact_mismatch": 0,
+        "generic_fact": 0,
+        "too_local_fact": 0,
     }
     for f in items:
-        fact = strip_text(f.get("fact", ""))
-        subject = strip_text(f.get("subject", ""))
+        if not isinstance(f, dict):
+            rejected["bad_item_type"] += 1
+            continue
+        normalized_item = normalize_knowledge_schema_item(f)
+        fact = strip_text(normalized_item.get("fact", ""))
+        subject = strip_text(normalized_item.get("subject", ""))
         # Факт и субъект обязательны
         if len(fact) < 10:
             rejected["short_fact"] += 1
@@ -3279,11 +4654,38 @@ def validate_knowledge(items: list[dict], log_prefix: str = "") -> list[dict]:
             rejected["short_subject"] += 1
             continue
         # Категория должна быть одной из ожидаемых
-        cat = f.get("category", "")
+        cat = normalized_item.get("category", "")
         if cat not in ("character", "place", "magic", "history", "event", "creature", "custom"):
             rejected["bad_category"] += 1
             continue
+        if cat == "custom" and subject_looks_like_character_identity(subject):
+            rejected["placeholder_subject"] += 1
+            continue
+        if is_placeholder_subject(subject, cat, narrator=""):
+            rejected["placeholder_subject"] += 1
+            continue
+        if source_text and not subject_tokens_grounded_in_source(subject, source_text, cat):
+            rejected["ungrounded_subject"] += 1
+            continue
+        if primary_text and not fact_tokens_grounded_in_primary(
+            fact,
+            primary_text,
+            category=cat,
+            subject=subject,
+        ):
+            rejected["ungrounded_fact"] += 1
+            continue
+        if not fact_anchor_matches_subject(fact, subject, category=cat):
+            rejected["subject_fact_mismatch"] += 1
+            continue
+        if generic_fact_looks_placeholder(fact, cat, subject):
+            rejected["generic_fact"] += 1
+            continue
+        if fact_looks_too_local_for_knowledge(fact, cat, subject):
+            rejected["too_local_fact"] += 1
+            continue
         cleaned = dict(f)
+        cleaned.update(normalized_item)
         cleaned["subject"] = subject
         cleaned["fact"] = fact
         cleaned["time_scope"] = normalize_time_scope(
@@ -3303,6 +4705,329 @@ def validate_knowledge(items: list[dict], log_prefix: str = "") -> list[dict]:
             f"отброшено {rejected_total} ({details})"
         )
     return valid
+
+
+KNOWLEDGE_VALIDATE_SYSTEM = """Ты — помощник для валидации фактов перед добавлением в базу знаний.
+Проверяешь, является ли каждый кандидат автономным и полезным фактом.
+Отвечай СТРОГО в line-protocol формате. Никакого текста до или после строк."""
+
+KNOWLEDGE_VALIDATE_PROMPT = """У тебя есть PRIMARY CHUNK и список уже извлечённых кандидатов в базу знаний.
+
+Для каждого кандидата реши: keep или drop.
+keep — самостоятельный, полезный, осмысленный факт для базы знаний.
+drop — шум, микрореакция, обрезанный subject, безымянный эпизодический персонаж,
+псевдоэнциклопедическая формулировка, факт без смысла вне одной фразы,
+summary сцены, пересказ рутины.
+
+КРИТЕРИИ KEEP:
+- факт явно подтверждён PRIMARY CHUNK, а не только SUPPORTING CONTEXT;
+- fact сформулирован вокруг своего subject, а не вокруг другого персонажа;
+- факт полезен отдельно от текущей сцены и не является просто пересказом реплики или жеста.
+
+КРИТЕРИИ DROP:
+- summary-абстракции вроде `курс адаптации`, `помощь в трудоустройстве`, `катализатор изменений`, `место действия`;
+- сценические пересказы вроде `Сэр Шурф унес Мелифаро под мышкой`, `Макс заявил, что будет коллекционировать амобилеры`, `Мелифаро назвал Макса своим главным спасителем`;
+- facts, где subject и fact не совпадают по фокусу: если subject=`Макс`, нельзя оставлять факт, начинающийся с `Сэр Джуффин ...`, если это не автономный факт именно о Максе;
+- псевдоопределения вроде `Ехо является местом действия...` и `персонаж, который присутствует в сцене`.
+
+Примеры:
+- keep: `Кимпа — Кимпа был старым дворецким дома Джуффина Халли`
+- keep: `Соединённое Королевство — В Соединённом Королевстве хлопать между лопаток допустимо только между ближайшими друзьями`
+- keep: `лихий ветер — «Лихим ветром» в Соединённом Королевстве называют непредсказуемых людей`
+- drop: `Макс — Макс проходил интенсивный курс адаптации к жизни в Ехо`
+- drop: `Ехо — Ехо является местом действия, где находится Малое Тайное Сыскное Войско`
+- drop: `Сэр Шурф — Сэр Шурф унес Мелифаро под мышкой, как свернутый в рулон ковер`
+- drop: `Макс — Сэр Джуффин Халли предложил Максу помощь в трудоустройстве`
+- drop: `Джуффин Халли — Джуффин Халли назвал Макса лихим ветром`
+
+ФОРМАТ ОТВЕТА — одна строка на кандидата:
+1 keep
+2 drop
+3 keep
+
+Не пиши ничего, кроме строк с номером и решением.
+
+PRIMARY CHUNK:
+---
+{chunk_excerpt}
+---
+
+КАНДИДАТЫ:
+{items_payload}
+"""
+
+
+def format_knowledge_items_for_validation_prompt(items: list[dict]) -> str:
+    """Форматирует кандидаты knowledge для узкого LLM-этапа валидации."""
+    lines = []
+    for idx, item in enumerate(items, 1):
+        lines.append(
+            f"{idx}. category={strip_text(item.get('category', ''))}; "
+            f"subject={strip_text(item.get('subject', ''))}; "
+            f"time_scope={normalize_time_scope(item.get('time_scope', ''), fact=strip_text(item.get('fact', '')), category=strip_text(item.get('category', '')))}; "
+            f"fact={strip_text(item.get('fact', ''))}"
+        )
+    return "\n".join(lines) if lines else "(нет кандидатов)"
+
+
+def validate_knowledge_items_with_llm(
+    client: OpenAI,
+    config: Config,
+    items: list[dict],
+    chunk: str,
+    *,
+    log_prefix: str = "",
+) -> list[dict]:
+    """Узкий LLM-этап: оставляет только автономные факты для базы знаний.
+
+    Fail-open: если валидация не удалась, возвращаем исходные items.
+    """
+    if not items or not config.knowledge_llm_validation_enabled:
+        return items
+
+    chunk_excerpt = timeline_chunk_excerpt(chunk, max(config.knowledge_validation_context_tokens, 300))
+    response = call_llm(
+        client,
+        config,
+        KNOWLEDGE_VALIDATE_SYSTEM,
+        KNOWLEDGE_VALIDATE_PROMPT.format(
+            chunk_excerpt=chunk_excerpt,
+            items_payload=format_knowledge_items_for_validation_prompt(items),
+        ),
+        max_tokens=config.max_tokens_knowledge_validate,
+        response_format=None,
+        log_prefix=log_prefix,
+        model_override=get_model_for_role(config, "knowledge_validate"),
+    )
+    if response is None:
+        return items
+
+    # Парсим ответ валидатора: поддерживаем и line-protocol ("1 keep"), и JSON-массив
+    decisions: dict[int, str] = {}
+    strategy = "unknown"
+
+    # Сначала пробуем line-protocol: "1 keep", "2 drop"
+    line_parsed = 0
+    for line in response.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        match = re.match(r"^(\d+)\s+(keep|drop)\b", line, re.IGNORECASE)
+        if match:
+            idx = int(match.group(1))
+            decision = match.group(2).lower()
+            decisions[idx] = decision
+            line_parsed += 1
+
+    if line_parsed >= max(len(items) // 2, 1):
+        strategy = "line_protocol"
+    else:
+        # Fallback: JSON-массив
+        data, strategy = parse_json_response(response, expect="array", log_prefix=log_prefix)
+        if isinstance(data, list):
+            for raw_decision in data:
+                if not isinstance(raw_decision, dict):
+                    continue
+                idx = raw_decision.get("idx")
+                if isinstance(idx, str) and idx.isdigit():
+                    idx = int(idx)
+                if not isinstance(idx, int):
+                    continue
+                decision = strip_text(raw_decision.get("decision", "")).lower()
+                if decision not in {"keep", "drop"}:
+                    continue
+                decisions[idx] = decision
+        else:
+            if log_prefix:
+                log_event(f"{log_prefix} llm-валидация не распознана, пропускаю фильтр")
+            return items
+
+    kept = []
+    dropped = 0
+    for idx, item in enumerate(items, 1):
+        decision = decisions.get(idx, "keep")
+        if decision == "drop":
+            dropped += 1
+            continue
+        kept.append(item)
+
+    if log_prefix:
+        log_event(
+            f"{log_prefix} llm-валидация: {len(kept)}/{len(items)} keep "
+            f"(drop={dropped}, strategy={strategy})"
+        )
+
+    return kept
+
+
+KNOWLEDGE_ARBITER_SYSTEM = """Ты арбитр между двумя extractor-моделями.
+Смотришь на PRIMARY CHUNK и на кандидаты фактов, предложенные разными моделями.
+Решаешь, что сохранить, что выбросить и что переписать в более автономную форму.
+Отвечай строго в line-протоколе. Никакого текста до или после строк решений."""
+
+KNOWLEDGE_ARBITER_PROMPT = """У тебя есть PRIMARY CHUNK и список спорных fact-кандидатов.
+Каждый кандидат предложен extractor-моделью и уже прошёл базовую валидацию, но требует арбитража.
+
+Твоя задача:
+- keep: сохранить факт как есть;
+- drop: выбросить шум, локальную сценическую деталь, слабый summary или дубль более сильного кандидата;
+- rewrite: факт полезный, но его надо переписать в более автономную форму.
+
+КРИТЕРИИ KEEP/REWRITE:
+- факт прямо опирается на PRIMARY CHUNK;
+- subject конкретный и самостоятельный;
+- fact полезен вне одной реплики или мимолётного жеста;
+- если два кандидата описывают один и тот же факт, оставь только лучшую версию.
+
+КРИТЕРИИ DROP:
+- разовая микрореакция, шутка, локальный жест;
+- общее summary сцены вместо факта;
+- факт сфокусирован не на своём subject;
+- псевдоэнциклопедическая пустота вроде `персонаж, который присутствует в сцене`;
+- category=`custom` c subject-персонажем вроде `Сэр Джуффин Халли`, если полезный факт здесь на самом деле о правиле мира или институте;
+- invented subject вроде `Странствие по дому`, `Сон в доме`, если это просто абстрактный ярлык для атмосферы сцены;
+- факты вида `Макс был назван лихим ветром` и `Джуффин приказал посетить «Обжору Бунба»`, если это только локальная реплика или распоряжение без самостоятельной ценности;
+- дубль более сильного кандидата.
+
+ФОРМАТ ОТВЕТА:
+1 keep
+2 drop
+3 rewrite | category=... | subject=... | fact=... | time_scope=...
+
+Не пиши ничего, кроме строк решений.
+
+Примеры:
+- keep: `Соединённое Королевство — В Соединённом Королевстве хлопать между лопаток допустимо только между ближайшими друзьями.`
+- keep: `лихий ветер — «Лихим ветром» в Соединённом Королевстве называют непредсказуемых людей.`
+- drop: `Сэр Джуффин Халли — Сэр Джуффин Халли хлопнул Макса между лопаток...`, если полезный факт здесь не о Джуффине, а о правиле Соединённого Королевства
+- drop: `Странствие по дому — Во время странствия по дому заклятие медленно снималось...`
+- drop: `Макс — Макс был назван лихим ветром сэром Джуффином Халли.`
+- drop: `Джуффин Халли — Джуффин Халли приказал Максу и Шурфу посетить «Обжору Бунба».`
+
+PRIMARY CHUNK:
+---
+{chunk_excerpt}
+---
+
+СПОРНЫЕ КАНДИДАТЫ:
+{items_payload}
+"""
+
+
+def format_knowledge_candidates_for_arbiter(candidates: list[dict]) -> str:
+    """Форматирует кандидаты от разных extractor-моделей для prompt арбитра."""
+    lines = []
+    for idx, item in enumerate(candidates, 1):
+        source = strip_text(item.get("_ensemble_source", "")) or "unknown"
+        evidence = strip_text(item.get("evidence", ""))
+        line = (
+            f"{idx}. source={source}; "
+            f"category={strip_text(item.get('category', ''))}; "
+            f"subject={strip_text(item.get('subject', ''))}; "
+            f"time_scope={normalize_time_scope(item.get('time_scope', ''), fact=strip_text(item.get('fact', '')), category=strip_text(item.get('category', '')))}; "
+            f"fact={strip_text(item.get('fact', ''))}"
+        )
+        if evidence:
+            line += f"; evidence={evidence}"
+        lines.append(line)
+    return "\n".join(lines) if lines else "(нет кандидатов)"
+
+
+def arbiter_resolve_knowledge_candidates_with_llm(
+    client: OpenAI,
+    config: Config,
+    candidates: list[dict],
+    chunk: str,
+    *,
+    log_prefix: str = "",
+) -> list[dict]:
+    """Арбитраж между extractor-моделями для спорных knowledge-фактов.
+
+    Fail-open: если арбитр не ответил или ответ сломан, возвращаем кандидаты как есть.
+    """
+    if not candidates:
+        return []
+
+    response = call_llm(
+        client,
+        config,
+        KNOWLEDGE_ARBITER_SYSTEM,
+        KNOWLEDGE_ARBITER_PROMPT.format(
+            chunk_excerpt=timeline_chunk_excerpt(
+                extract_primary_chunk_text(chunk) or chunk,
+                max(config.knowledge_validation_context_tokens, 400),
+            ),
+            items_payload=format_knowledge_candidates_for_arbiter(candidates),
+        ),
+        max_tokens=config.max_tokens_knowledge_arbiter,
+        response_format=None,
+        log_prefix=log_prefix,
+        model_override=get_model_for_role(config, "knowledge_arbiter"),
+    )
+    if response is None:
+        return [strip_internal_knowledge_fields(item) for item in candidates]
+
+    decisions: dict[int, tuple[str, Optional[dict]]] = {}
+    parsed_lines = 0
+
+    for raw_line in response.strip().splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        match = re.match(
+            r"^(\d+)\s+(keep|drop|rewrite)\b(?:\s*\|\s*(.*))?$",
+            line,
+            re.IGNORECASE,
+        )
+        if not match:
+            continue
+
+        idx = int(match.group(1))
+        decision = match.group(2).lower()
+        payload_text = strip_text(match.group(3) or "")
+        rewrite_item = None
+        if decision == "rewrite" and payload_text:
+            parsed_payload = parse_labeled_line_fields(payload_text) or parse_positional_line_fields(payload_text)
+            if parsed_payload:
+                rewrite_item = normalize_knowledge_schema_item(parsed_payload)
+                if not rewrite_item.get("time_scope"):
+                    rewrite_item["time_scope"] = "unclear"
+        decisions[idx] = (decision, rewrite_item)
+        parsed_lines += 1
+
+    if parsed_lines == 0:
+        if log_prefix:
+            log_event(f"{log_prefix} арбитр не распознан, пропускаю спорные факты без изменений")
+        return [strip_internal_knowledge_fields(item) for item in candidates]
+
+    kept: list[dict] = []
+    dropped = 0
+    rewritten = 0
+    source_text = f"[PRIMARY CHUNK]\n{extract_primary_chunk_text(chunk) or chunk}"
+
+    for idx, candidate in enumerate(candidates, 1):
+        decision, rewrite_item = decisions.get(idx, ("keep", None))
+        if decision == "drop":
+            dropped += 1
+            continue
+
+        final_item = strip_internal_knowledge_fields(candidate)
+        if decision == "rewrite" and isinstance(rewrite_item, dict):
+            validated_rewrite = validate_knowledge([rewrite_item], source_text=source_text)
+            if validated_rewrite:
+                final_item = strip_internal_knowledge_fields(validated_rewrite[0])
+                rewritten += 1
+
+        kept, _ = merge_knowledge_items(kept, [final_item])
+
+    if log_prefix:
+        log_event(
+            f"{log_prefix} арбитраж: {len(kept)}/{len(candidates)} keep "
+            f"(drop={dropped}, rewrite={rewritten})"
+        )
+
+    return kept
 
 
 # ──────────────────────────────────────────────
@@ -3386,6 +5111,15 @@ KNOWLEDGE_PROMPT = """Из фрагмента книги Макса Фрая и�
 — Один объект = один факт. Не объединяй разные факты.
 — Извлекай ПОЛНО, но только самостоятельные и полезные факты:
   персонажи, места, предметы мира, магию, отношения, состояния, события, причины, последствия, локальные открытия сцены.
+— Работай в режиме текущего knowledge-трека:
+{track_instruction}
+— Не выдумывай новые имена, фамилии, инициалы, сокращения и названия. Используй только формы,
+  которые явно есть в PRIMARY CHUNK, SUPPORTING CONTEXT или SCENE GLOSSARY.
+— Если речь о рассказчике книги Макса и в тексте нет более точного полного имени, используй subject "Макс".
+— Не используй слишком общие subject вроде "Эпоха", "Период", "Мир", "Событие", если в тексте есть
+  более конкретное название вроде "Эпоха Кодекса", "Кодекс Хрембера", "Смутные Времена".
+— Subject должен быть ТОЧНОЙ и ПОЛНОЙ формой из текста. Не обрезай слова и названия:
+  если в тексте есть "Обжора Бунба", нельзя писать "Обжор".
 — Перед добавлением факта мысленно проверь:
   можно ли понять subject вне текущего предложения,
   полезен ли факт сам по себе,
@@ -3403,6 +5137,21 @@ KNOWLEDGE_PROMPT = """Из фрагмента книги Макса Фрая и�
   "квартира на улице Желтых Камней", а не общие слова.
 - Не используй как place предметы и части сцены вроде "дверь", "окно", "лестница",
   а также сцепленные описания вроде "дом и сад", если это не собственное название места.
+- Не делай place-фактами голые названия комнат и следов вроде "гостиная", "кабинет",
+  "комната", "сад", "след", если дальше идёт только описание текущего кадра
+  вроде "В центре гостиной стоял..." или "Место, где Макс обнаружил следы...".
+- Для персонажей пропускай безымянных эпизодических людей вроде "старушка", "старик", "мужчина",
+  "женщина", "дворецкий", если это не важная устойчивая роль или повторяющаяся фигура.
+- Не пиши псевдофакты вида "Руди — это персонаж, который, по-видимому, является источником шума
+  или внимания в данной сцене". Если это не самостоятельный факт о персонаже — пропусти.
+- Для category="character" НЕ извлекай отдельные одноразовые сценические реакции и реплики:
+  "удивился", "спросил", "посоветовал", "пошутил", "решил объяснить".
+  Такие вещи либо относятся к крупному событию в category="event", либо пропускаются.
+- Для category="event" тоже не нужно дробить сцену до каждого микродействия и каждой реплики.
+  Извлекай только события, решения, открытия и изменения с последствиями.
+- Не создавай event-факты из рутинных логистических эпизодов и пересказов вроде
+  "обед в «Обжоре Бунбу»" или "утренний «подвиг» Макса", если это просто кто-то пошёл обедать
+  или пересказал уже случившееся без нового важного последствия.
 - Для category="custom" извлекай только УСТОЙЧИВЫЕ элементы мира и быта:
   именованные напитки, еду, одежду, транспорт, ритуалы, социальные правила, профессии, институты и повторяющиеся практики.
 - Для category="custom" subject должен быть названием самого обычая/предмета/практики:
@@ -3418,6 +5167,23 @@ KNOWLEDGE_PROMPT = """Из фрагмента книги Макса Фрая и�
 — Если ниже есть SCENE GLOSSARY, используй его только как справочник каноничных имён и сущностей.
   Он НЕ добавляет новых фактов и не заменяет PRIMARY CHUNK.
 — Извлекать нужно только факты и события, которые явно присутствуют в PRIMARY CHUNK.
+— Не превращай ответ в каталог сущностей сцены. Нельзя писать общие описания вроде
+  "персонаж, который присутствует в сцене" или "место, где происходят события".
+  Нужны только конкретные атомарные факты, подтверждённые PRIMARY CHUNK.
+- Не пиши пустые псевдоэнциклопедические определения вроде:
+  "Это место, где...", "Это предмет, который...", "Это миф...", "Это одно из заведений...".
+  Если не можешь сформулировать содержательный факт, пропусти его.
+— За один проход верни не более {page_max_items} НОВЫХ фактов. Если важных фактов больше,
+  верни самые содержательные и оставь остальные для следующего прохода.
+— Используй только ключи JSON `category`, `subject`, `fact`, `time_scope`.
+  Не используй русские ключи вроде `категория`, `имя`, `описание`.
+— НЕЛЬЗЯ возвращать wrapper-схемы вроде `{{"characters": [...], "setting": ..., "summary": ...}}`,
+  `{{"plot_summary": ...}}`, `{{"key_events": ...}}` или массивы объектов с полями `name/description`,
+  `entity/type/description`, `character/action/details`, `role/content`. Нужен только плоский JSON-массив фактов целевой схемы.
+— Нельзя подменять факты общими псевдоопределениями вроде:
+  `Макс Фрай — главный герой, который попадает в новый мир`
+  или `Европа — место действия, где Макс Фрай оказался`.
+  Если модель склоняется к такому каталогу сущностей — верни `[]`.
 {pagination_note}
 НЕ ПИШИ НИЧЕГО, КРОМЕ JSON. НИКАКИХ ОБЪЯСНЕНИЙ ИЛИ ВВОДНЫХ СЛОВ.
 НЕ используй ```json или другие markdown-обёртки — только чистый JSON.
@@ -3430,6 +5196,346 @@ KNOWLEDGE_PROMPT = """Из фрагмента книги Макса Фрая и�
 JSON:"""
 
 
+KNOWLEDGE_LINE_PROMPT_V3 = """Из PRIMARY CHUNK извлеки автономные факты для базы знаний мира Ехо.
+
+РЕЖИМ: {track_title}
+{track_instruction}
+
+ФОРМАТ ОТВЕТА:
+Верни только строки line-протокола, ОДИН ФАКТ = ОДНА СТРОКА.
+Строгий формат каждой строки:
+category=... | subject=... | fact=... | time_scope=...
+
+Пример хороших строк:
+category=character | subject=Кимпа | fact=Кимпа был гонщиком, прежде чем стать дворецким Джуффина. | time_scope=past
+category=place | subject=Дом у Моста | fact=Дом у Моста служит штабом Тайного Сыска. | time_scope=timeless
+category=magic | subject=Безмолвная речь | fact=Безмолвная речь является обычным способом общения на расстоянии. | time_scope=timeless
+category=event | subject=Макс | fact=Макс впервые прибывает в Ехо. | time_scope=past
+category=custom | subject=Соединённое Королевство | fact=В Соединённом Королевстве хлопать между лопаток допустимо только между ближайшими друзьями. | time_scope=timeless
+category=place | subject=Обжора Бунба | fact=Обжора Бунба — забегаловка, известная горячими паштетами и камрой. | time_scope=timeless
+category=custom | subject=лихий ветер | fact=«Лихим ветром» в Соединённом Королевстве называют непредсказуемых людей. | time_scope=timeless
+
+Пример плохих строк:
+category=character | subject=Макс | fact=Макс проходил интенсивный курс адаптации к жизни в Ехо. | time_scope=past
+category=character | subject=сэр Джуффин Халли | fact=Сэр Джуффин Халли предложил Максу помощь в трудоустройстве. | time_scope=past
+category=character | subject=сэр Джуффин Халли | fact=Сэр Джуффин Халли стал катализатором изменения привычек Макса. | time_scope=change
+category=place | subject=Ехо | fact=Ехо является местом действия, где находится Малое Тайное Сыскное Войско. | time_scope=timeless
+category=character | subject=Сэр Шурф | fact=Сэр Шурф унес Мелифаро под мышкой, как свернутый в рулон ковер. | time_scope=past
+category=event | subject=Джуффин Халли | fact=Джуффин Халли назвал Макса лихим ветром. | time_scope=past
+
+Категории:
+- character
+- place
+- magic
+- history
+- event
+- creature
+- custom
+
+Time scope:
+- timeless
+- past
+- current
+- change
+- ended
+- unclear
+
+Главные правила:
+- PRECISION FIRST: лучше вернуть меньше строк, чем мусор.
+- Используй только факты, явно подтверждённые PRIMARY CHUNK.
+- SUPPORTING CONTEXT и SCENE GLOSSARY нужны только для атрибуции, местоимений и каноничного именования.
+- Subject должен быть полным и естественным. Не обрезай названия: если в тексте есть «Обжора Бунба», нельзя писать «Обжор».
+- Если рассказчик говорит от первого лица, не пиши псевдоэнциклопедию вроде `Макс — персонаж, который...`. Пиши прямой факт: `Макс не мог спать по ночам с детства.`
+- Fact должен быть автономным утверждением, полезным вне одной реплики или одной микросцены.
+- Fact должен быть сфокусирован на своём subject. Для `character`, `creature`, `magic`, `event` нормальная строка начинается с subject или сразу с конструкции про него. Если subject=`Макс`, нельзя писать факт, начинающийся с `Сэр Джуффин ...`, даже если дальше там встречается Макс.
+- Не пиши summary-абстракции вроде `курс адаптации`, `осваивается в новом мире`, `помощь в трудоустройстве`, `катализатор изменений`, `место действия`.
+- Не пиши сценические пересказы и реплики-пересказы вроде `Сэр Шурф унес Мелифаро под мышкой`, `Макс заявил, что будет коллекционировать амобилеры`, `Мелифаро назвал Макса своим главным спасителем`.
+- Если фраза звучит как пересказ темы эпизода, а не как проверяемое знание о мире, персонаже или событии, не извлекай её.
+- Не используй символ `|` внутри значений полей.
+- За один проход верни не более {page_max_items} новых строк.
+
+Нельзя:
+- никакого JSON, TOML, YAML, markdown, нумерации и пояснений;
+- никакого каталога сущностей сцены и wrapper-схем;
+- никаких псевдоопределений вроде `Это место, где...`, `Это предмет, который...`, `Это миф...`;
+- никаких placeholder-subject вроде `Два друга`, `Два персонажа`, `Действие`, `character`, `место`, `улица`, `старушка`;
+- никаких bare role-subject вроде `Король`, `Леди`, `Генерал`, `Магистр`, если текст не даёт точного имени;
+- никаких summary-формул вроде `X сообщил`, `X рассказал`, `X заметил`, если это не выражает устойчивое знание или важное изменение;
+- никаких фраз с неопределённостью: `видимо`, `возможно`, `вероятно`, `упоминается в контексте`, `не раскрывается`, `в тексте не упоминается`.
+
+Если подходящих фактов нет, верни пустой ответ без пояснений.
+{pagination_note}
+
+Материал:
+---
+{chunk_payload}
+---
+"""
+
+
+KNOWLEDGE_PROMPT_V2 = """Из фрагмента книги Макса Фрая извлеки ФАКТЫ о мире Ехо, персонажах и событиях.
+Из PRIMARY CHUNK извлеки автономные факты для базы знаний мира Ехо.
+
+РЕЖИМ: {track_title}
+{track_instruction}
+
+Верни ПЛОСКИЙ JSON-массив объектов:
+{{"category": "...", "subject": "...", "fact": "...", "time_scope": "..."}}
+
+Категории:
+- "character": устойчивые свойства, роли, отношения, биография и статус персонажа
+- "place": именованные места и их устойчивые свойства
+- "magic": магия, артефакты и правила магии
+- "history": прошлые фазы мира, периоды и изменения устройства мира
+- "event": важные события и изменения состояния с последствиями
+- "creature": существа
+- "custom": устойчивые предметы, институты, привычки и элементы быта мира
+
+Главные правила:
+- PRECISION FIRST: если сомневаешься, ПРОПУСТИ. Лучше недобрать факт, чем записать мусор.
+- Один объект = один законченный факт, полезный вне одной реплики.
+- Извлекай только то, что ЯВНО подтверждено PRIMARY CHUNK.
+- Subject должен быть полным и естественным. Не обрезай названия: если в тексте есть "Обжора Бунба", нельзя писать "Обжор".
+- Если subject нельзя назвать коротко и естественно вне текущей сцены, пропусти факт.
+- Если в тексте нет более точного полного имени рассказчика, используй subject "Макс".
+- SUPPORTING CONTEXT и SCENE GLOSSARY используй только для именования, местоимений и атрибуции. Они не добавляют новых фактов.
+- Fact должен быть самодостаточным утверждением, которое имеет смысл отдельно от сцены. Если фраза похожа на summary, комментарий о сцене или догадку модели, пропусти её.
+- Не добавляй факт, если он содержит неопределённость или мета-комментарий: `видимо`, `вероятно`, `возможно`, `может быть`, `предполагается`, `упоминается в контексте`, `не раскрывается`, `в тексте не упоминается`, `в данном отрывке`.
+- Если книга написана от первого лица, НЕ превращай фразы в псевдоэнциклопедию вида `Макс — персонаж, который...`. Переписывай их как прямой факт: `Макс не мог спать по ночам`, `Макс родом из другого мира`, `Кимпа был гонщиком`.
+- Для `character` предпочитай устойчивые свойства, происхождение, роли, отношения, навыки и значимые решения. Не сохраняй просто факт говорения: `Джуффин сообщил`, `Меламори сказала`, `Макс рассказал`.
+- Для `place` сохраняй только именованные или ясно индивидуализированные места с собственным смыслом: `Ехо`, `Дом у Моста`, `улица Забытых Поэтов`, `Холоми`. Не сохраняй просто декорации кадра.
+- Для `magic` и `custom` сохраняй устройство мира, правила, артефакты и устойчивые практики. Не сохраняй разовый эпизод применения способности как отдельный мировой факт.
+
+Нельзя:
+- wrapper-схемы и каталоги сущностей: {{"characters": [...]}}, {{"summary": "..."}}, `name/description`, `entity/type/description`, `character/action/details`, `role/content`;
+- псевдоопределения вроде "Это место, где...", "Это предмет, который...", "Это миф...", "Это одно из заведений...";
+- каталожные записи вроде `Макс Фрай — главный герой, который попадает в новый мир` или `Европа — место действия, где Макс Фрай оказался`;
+- placeholders и обрезки вроде "место", "место действия", "улица", "кабинет", "старушка", "мужчина";
+- абстрактные meta-subject вроде `Два друга`, `Два персонажа`, `Действие`, `Действия`, `character`;
+- bare role-subject вроде `Король`, `Леди`, `Генерал`, `Магистр`, `Посыльный`, `Свидетель`, если текст не даёт точного имени или устойчивой идентичности;
+- bare place-subject вроде "гостиная", "кабинет", "сад", "след", если дальше идёт только описание кадра вроде `В центре гостиной стоял...`;
+- безымянные эпизодические персонажи и псевдофакты вроде `Руди — это персонаж, который...`;
+- пустые или тавтологические записи вроде `Королевский двор — Королевский двор`, `Энциклопедия — Энциклопедия`, `В тексте не упоминается`, `Описание отсутствует`;
+- speculative и бессодержательные формулировки вроде `мадам (вероятно, имеется в виду...)`, `Предмет, который был замечен`, `Один из них — ...`;
+- context-only факты вроде `упоминается в контексте`, `не раскрывается`, `был в курсе событий`, `был в центре внимания`, `был в состоянии, когда...`, `может быть источником информации`;
+- разовые микрореакции для `character`: "удивился", "спросил", "посоветовал", "решил объяснить";
+- разовые случаи применения `magic`, если это просто эпизод сцены вроде `Безмолвная речь собаки передала Максу...`, а не устойчивое свойство магии;
+- рутинные или пустые `event`-пересказы вроде `обед в «Обжоре Бунбу»` и `утренний «подвиг» Макса`, если это не меняет состояние мира или персонажей;
+- шум в `custom`: анонимные группы вроде `ведьмочки`, обсуждаемые темы вроде `кошки`, и безымянные описательные предметы вроде `полумесяц из плотной ткани с карманами` или `пояс`, если это просто деталь текущей сцены.
+
+Примеры BAD:
+- `Луукфи Пэнц — упоминается в контексте событий, но не раскрывается`
+- `Король — видимо, был в состоянии, когда ему было необходимо, чтобы его оставили в покое`
+- `Королевский двор — Королевский двор`
+- `Энциклопедия — Энциклопедия`
+- `Посыльный — персонаж, который не упоминается в данном отрывке`
+- `Макс — персонаж, который в процессе повествования раскрывает свои способности`
+- `Джуффин Халли сообщил, что обнаружил невидимое чудо`
+- `Меламори — персонаж, который, по мнению рассказчика, не нуждается в постоянном внимании`
+
+Примеры GOOD:
+- `Джуффин Халли — Джуффин считает, что Макс обладает способностями к Невидимой магии`
+- `Кодекс Хрембера — Кодекс Хрембера больше не действует`
+- `Дом у Моста — Дом у Моста служит штабом Тайного Сыска`
+- `камра — Камра является обычным горячим напитком в Ехо`
+- `Холоми — В Холоми невозможно колдовать, поэтому крепость служит тюрьмой для любителей запретной магии`
+- `Кимпа — Кимпа был гонщиком, прежде чем стать дворецким Джуффина`
+- `Макс — Макс не мог спать по ночам с детства`
+- `Безмолвная речь — Безмолвная речь является обычным способом общения на расстоянии`
+
+Если модель начинает скатываться в каталог сущностей сцены вместо фактов — верни `[]`.
+За один проход верни не более {page_max_items} НОВЫХ фактов; остальные оставь для следующего прохода.
+Используй только JSON-ключи `category`, `subject`, `fact`, `time_scope`.
+{pagination_note}
+
+НЕ ПИШИ НИЧЕГО, КРОМЕ JSON.
+
+Материал:
+---
+{chunk_payload}
+---
+
+JSON:"""
+
+
+def extract_knowledge_with_model(
+    client: OpenAI,
+    config: Config,
+    chunk: str,
+    *,
+    chunk_payload: str,
+    model_override: str,
+    log_prefix: str = "",
+    model_tag: str = "",
+) -> tuple[list[dict], dict]:
+    """Один проход knowledge extraction конкретной моделью."""
+    extracted: list[dict] = []
+    stats = {
+        "model": model_override or config.model,
+        "candidate_items": 0,
+        "validated_items": 0,
+        "final_items": 0,
+        "format_failures": 0,
+        "nonempty_responses": 0,
+        "pages": 0,
+    }
+
+    for track_name, track_spec in iter_knowledge_extraction_tracks(config):
+        track_extracted: list[dict] = []
+        for pass_idx in range(max(config.extraction_passes, 1)):
+            page_prefix = f"{log_prefix}[{model_tag}{track_name}][page {pass_idx + 1}]" if log_prefix else ""
+            try:
+                pagination_note = make_knowledge_pagination_note(
+                    pass_idx,
+                    track_extracted,
+                    track_name=track_name,
+                )
+                prompt, response_format, protocol = build_knowledge_extraction_prompt(
+                    config,
+                    chunk_payload=chunk_payload,
+                    track_spec=track_spec,
+                    page_max_items=config.knowledge_page_max_items,
+                    pagination_note=pagination_note,
+                )
+                response = call_llm(
+                    client,
+                    config,
+                    KNOWLEDGE_SYSTEM,
+                    prompt,
+                    max_tokens=config.max_tokens_knowledge,
+                    response_format=response_format,
+                    log_prefix=page_prefix,
+                    model_override=model_override,
+                )
+
+                stats["pages"] += 1
+                if response is None:
+                    break
+                if strip_text(response):
+                    stats["nonempty_responses"] += 1
+
+                candidate_items: list[dict] = []
+                strategy = protocol
+
+                if protocol == "lines":
+                    candidate_items, strategy = parse_knowledge_line_protocol(
+                        response,
+                        log_prefix=page_prefix,
+                    )
+
+                if not candidate_items:
+                    data, strategy = parse_json_response(
+                        response,
+                        expect="array",
+                        log_prefix=page_prefix,
+                    )
+                    if isinstance(data, list):
+                        candidate_items = coerce_knowledge_payload_to_items(
+                            data,
+                            log_prefix=page_prefix,
+                        )
+                        if not candidate_items:
+                            object_data, object_strategy = parse_json_response(
+                                response,
+                                expect="object",
+                                log_prefix=page_prefix,
+                            )
+                            if isinstance(object_data, dict):
+                                object_candidates = coerce_knowledge_payload_to_items(
+                                    object_data,
+                                    log_prefix=page_prefix,
+                                )
+                                if object_candidates:
+                                    strategy = f"{object_strategy}+object_fallback"
+                                    candidate_items = object_candidates
+                    else:
+                        object_data, object_strategy = parse_json_response(
+                            response,
+                            expect="object",
+                            log_prefix=page_prefix,
+                        )
+                        if not isinstance(object_data, dict):
+                            if strip_text(response):
+                                stats["format_failures"] += 1
+                            if log_prefix:
+                                log_event(f"{page_prefix} ответ не удалось распарсить ни как line-protocol, ни как JSON")
+                            break
+                        strategy = f"{object_strategy}+object"
+                        candidate_items = coerce_knowledge_payload_to_items(
+                            object_data,
+                            log_prefix=page_prefix,
+                        )
+                        if not candidate_items:
+                            if strip_text(response):
+                                stats["format_failures"] += 1
+                            if log_prefix:
+                                log_event(f"{page_prefix} JSON-объект не удалось преобразовать в факты")
+                            break
+
+                stats["candidate_items"] += len(candidate_items)
+                page_items = validate_knowledge(
+                    candidate_items,
+                    log_prefix=page_prefix,
+                    source_text=chunk_payload,
+                )
+                stats["validated_items"] += len(page_items)
+                page_items = validate_knowledge_items_with_llm(
+                    client,
+                    config,
+                    page_items,
+                    chunk,
+                    log_prefix=f"{page_prefix}[llm-validate]" if page_prefix else "",
+                )
+                track_extracted, track_added = merge_knowledge_items(track_extracted, page_items)
+                extracted, global_added = merge_knowledge_items(extracted, page_items)
+                if log_prefix:
+                    log_event(
+                        f"{page_prefix} extraction ok: {len(candidate_items)} кандидатов "
+                        f"({strategy}), новых_трека={track_added}, новых_всего={global_added}, накоплено={len(extracted)}"
+                    )
+                if not page_items or track_added == 0:
+                    break
+            except Exception as exc:
+                if log_prefix:
+                    log_event(f"{page_prefix} ошибка обработки страницы знаний: {exc}")
+                break
+
+    stats["final_items"] = len(extracted)
+    return extracted, stats
+
+
+def should_run_secondary_knowledge_extraction(
+    config: Config,
+    primary_items: list[dict],
+    primary_stats: dict,
+) -> bool:
+    """Решает, стоит ли звать вторую extractor-модель на подозрительном чанке."""
+    if not getattr(config, "knowledge_dual_extraction_enabled", False):
+        return False
+    secondary_model = strip_text(getattr(config, "knowledge_extract_model_secondary", ""))
+    if not secondary_model:
+        return False
+    primary_model = (
+        strip_text(getattr(config, "knowledge_extract_model", ""))
+        or strip_text(getattr(config, "model", ""))
+    )
+    if primary_model and normalize_dedup_text(primary_model) == normalize_dedup_text(secondary_model):
+        return False
+
+    final_items = len(primary_items)
+    if final_items <= max(getattr(config, "knowledge_ensemble_low_fact_threshold", 0), 0):
+        return True
+    if int(primary_stats.get("format_failures", 0)) > 0:
+        return True
+
+    candidate_items = int(primary_stats.get("candidate_items", 0))
+    if candidate_items <= 0:
+        return False
+
+    drop_ratio = 1.0 - (final_items / max(candidate_items, 1))
+    return drop_ratio >= float(getattr(config, "knowledge_ensemble_drop_ratio_threshold", 1.0))
+
+
 def extract_knowledge(
     client: OpenAI,
     config: Config,
@@ -3437,51 +5543,68 @@ def extract_knowledge(
     log_prefix: str = "",
     chunk_payload: Optional[str] = None,
 ) -> list[dict]:
-    """Извлекает факты о мире из фрагмента."""
+    """Извлекает факты о мире из фрагмента.
+
+    Базовый путь: primary extractor.
+    Fallback для подозрительных чанков: secondary extractor + арбитр на спорных фактах.
+    """
     payload = chunk_payload or f"[PRIMARY CHUNK]\n{chunk}"
-    extracted: list[dict] = []
+    primary_model = get_model_for_role(config, "knowledge_extract")
+    primary_items, primary_stats = extract_knowledge_with_model(
+        client,
+        config,
+        chunk,
+        chunk_payload=payload,
+        model_override=primary_model,
+        log_prefix=log_prefix,
+        model_tag="",
+    )
 
-    for pass_idx in range(max(config.extraction_passes, 1)):
-        response = call_llm(
-            client,
-            config,
-            KNOWLEDGE_SYSTEM,
-            KNOWLEDGE_PROMPT.format(
-                chunk_payload=payload,
-                pagination_note=make_knowledge_pagination_note(pass_idx, extracted),
-            ),
-            max_tokens=config.max_tokens_knowledge,
-            response_format="json" if _use_ollama_native else None,
-            log_prefix=f"{log_prefix}[page {pass_idx + 1}]" if log_prefix else "",
+    if not should_run_secondary_knowledge_extraction(config, primary_items, primary_stats):
+        return [strip_internal_knowledge_fields(item) for item in primary_items]
+
+    secondary_model = get_model_for_role(config, "knowledge_extract_secondary")
+    if log_prefix:
+        log_event(
+            f"{log_prefix}[ensemble] подозрительный чанк: primary={len(primary_items)} "
+            f"(candidate={primary_stats.get('candidate_items', 0)}, format_failures={primary_stats.get('format_failures', 0)}), "
+            f"запускаю secondary={secondary_model}"
         )
 
-        if response is None:
-            break
+    secondary_items, secondary_stats = extract_knowledge_with_model(
+        client,
+        config,
+        chunk,
+        chunk_payload=payload,
+        model_override=secondary_model,
+        log_prefix=log_prefix,
+        model_tag="secondary:",
+    )
 
-        data, strategy = parse_json_response(
-            response,
-            expect="array",
-            log_prefix=f"{log_prefix}[page {pass_idx + 1}]" if log_prefix else "",
+    agreed_items, unresolved_items = merge_knowledge_extractor_outputs(
+        primary_items,
+        secondary_items,
+        primary_chunk=extract_primary_chunk_text(payload) or chunk,
+    )
+
+    if log_prefix:
+        log_event(
+            f"{log_prefix}[ensemble] merge: agreed={len(agreed_items)}, unresolved={len(unresolved_items)}, "
+            f"secondary_final={secondary_stats.get('final_items', 0)}"
         )
-        if not isinstance(data, list):
-            if log_prefix:
-                log_event(f"{log_prefix}[page {pass_idx + 1}] ответ не удалось распарсить как JSON-массив")
-            break
 
-        page_items = validate_knowledge(
-            data,
-            log_prefix=f"{log_prefix}[page {pass_idx + 1}]" if log_prefix else "",
-        )
-        extracted, added = merge_knowledge_items(extracted, page_items)
-        if log_prefix:
-            log_event(
-                f"{log_prefix}[page {pass_idx + 1}] JSON ok: {len(data)} фактов "
-                f"({strategy}), новых={added}, накоплено={len(extracted)}"
-            )
-        if not page_items or added == 0:
-            break
+    arbiter_items = arbiter_resolve_knowledge_candidates_with_llm(
+        client,
+        config,
+        unresolved_items,
+        chunk,
+        log_prefix=f"{log_prefix}[arbiter]" if log_prefix else "",
+    )
 
-    return extracted
+    merged: list[dict] = []
+    merged, _ = merge_knowledge_items(merged, [strip_internal_knowledge_fields(item) for item in agreed_items])
+    merged, _ = merge_knowledge_items(merged, [strip_internal_knowledge_fields(item) for item in arbiter_items])
+    return merged
 
 
 _SUBJECT_PREFIX_NOISE = {
@@ -3582,6 +5705,13 @@ _GENERIC_SUBJECTS_ANY = {
     "рассказчик",
     "автор",
     "существо",
+    "character",
+    "entity",
+    "subject",
+    "действие",
+    "действия",
+    "событие",
+    "события",
 }
 
 _GENERIC_CHARACTER_SUBJECTS = _GENERIC_SUBJECTS_ANY | {
@@ -3603,6 +5733,27 @@ _GENERIC_CHARACTER_SUBJECTS = _GENERIC_SUBJECTS_ANY | {
     "незнакомка",
     "посетитель",
     "прохожий",
+    "старушка",
+    "старик",
+    "женщина",
+    "мужчина",
+    "парень",
+    "девушка",
+    "мальчик",
+    "девочка",
+    "слуга",
+    "слуги",
+    "дворецкий",
+    "два друга",
+    "два персонажа",
+    "генерал",
+    "мадам",
+    "леди",
+    "король",
+    "королева",
+    "магистр",
+    "посыльный",
+    "свидетель",
 }
 
 _GENERIC_PLACE_SUBJECTS = {
@@ -3635,6 +5786,20 @@ _GENERIC_PLACE_SUBJECTS = {
     "каком то месте",
     "каком-то месте",
     "одном месте",
+    "улица",
+    "дом",
+    "кабинет",
+    "гостиная",
+    "комната",
+    "зал",
+    "спальня",
+    "кухня",
+    "сад",
+    "двор",
+    "след",
+    "следы",
+    "стол",
+    "сарайчик",
 }
 
 _LEADING_PREPOSITIONS = {
@@ -3947,6 +6112,28 @@ def lookup_canonical_character(subject: str) -> Optional[str]:
     return None
 
 
+def subject_looks_like_character_identity(subject: str) -> bool:
+    """Грубая эвристика: subject выглядит как имя/роль персонажа, а не как предмет мира."""
+    clean = strip_text(subject)
+    if not clean:
+        return False
+    if lookup_canonical_character(clean):
+        return True
+
+    lowered = normalize_subject_for_dedup(clean)
+    tokens = lowered.split()
+    if not tokens:
+        return False
+    if tokens[0] in _CHARACTER_HONORIFICS:
+        return True
+    if len(tokens) == 1 and tokens[0] in {
+        "макс", "джуффин", "шурф", "мелифаро", "кофа", "кимпа", "меламори",
+        "нумминорих", "теххи", "сотофа", "лойсо", "нуфлин", "гуриг", "маба",
+    }:
+        return True
+    return False
+
+
 def subject_signature_tokens(subject: str) -> set[str]:
     """Возвращает ключевые токены subject без общих сущностных слов."""
     tokens = normalize_subject_for_dedup(subject).split()
@@ -4243,6 +6430,19 @@ def is_placeholder_subject(subject: str, category: str, narrator: str = "") -> b
         return True
 
     if category == "place" and normalized in _GENERIC_PLACE_SUBJECTS:
+        return True
+
+    if category == "event" and normalized in {"действие", "действия", "событие", "события"}:
+        return True
+
+    if category == "custom" and normalized in {"сон"}:
+        return True
+
+    if category == "character" and re.match(
+        r"^(два|три|несколько)\s+(друга|друзей|персонажа|персонажей|героя|героев|людей|человек)\b",
+        normalized,
+        re.IGNORECASE,
+    ):
         return True
 
     if re.match(
@@ -4976,6 +7176,7 @@ def resolve_knowledge_item_with_kb(
         max_tokens=config.max_tokens_knowledge_link,
         response_format="json" if _use_ollama_native else None,
         log_prefix=log_prefix,
+        model_override=get_model_for_role(config, "knowledge_link"),
     )
     if response is None:
         return item
@@ -4993,7 +7194,22 @@ def resolve_knowledge_item_with_kb(
         candidate_id = None
 
     if decision == "drop_duplicate":
-        if candidate_id is None or candidate_id in candidate_by_id:
+        if candidate_id is None or candidate_id not in candidate_by_id:
+            return item
+        candidate = candidate_by_id[candidate_id]
+        same_category = strip_text(candidate.get("category", "")) == strip_text(item.get("category", ""))
+        if (
+            same_category
+            and not time_scopes_meaningfully_differ(item, candidate)
+            and subjects_look_duplicate(
+                strip_text(item.get("subject", "")),
+                strip_text(candidate.get("subject", "")),
+            )
+            and facts_look_duplicate(
+                strip_text(item.get("fact", "")),
+                strip_text(candidate.get("fact", "")),
+            )
+        ):
             return None
         return item
 
@@ -5092,12 +7308,29 @@ COMBINED_PROMPT = """Из фрагмента книги Макса Фрая из
 — Извлекай полно, но только самостоятельные факты и важные локальные события сцены.
 — Если текст описывает изменение состояния, статуса или устройства мира, сохраняй разные фазы
   отдельно: "раньше", "теперь", "после", "больше не". Не сглаживай противоречащие друг другу факты.
+— Subject должен быть точной ПОЛНОЙ формой из текста. Не обрезай слова и названия:
+  если в тексте есть "Обжора Бунба", нельзя писать "Обжор".
 — Не используй placeholders вроде "место", "место действия", "улица", "кабинет",
   "персонаж", "человек", если в тексте есть более точное обозначение.
 — Для мест используй точные формы вроде "улица Желтых Камней", "Дом у Моста",
   "кабинет Короля", "квартира на улице Желтых Камней", а не общие слова.
 — Не используй как place предметы и части сцены вроде "дверь", "окно", "лестница",
   а также сцепленные описания вроде "дом и сад", если это не собственное название места.
+— Не делай place-фактами голые названия комнат и следов вроде "гостиная", "кабинет",
+  "комната", "сад", "след", если дальше идёт только описание текущего кадра
+  вроде "В центре гостиной стоял..." или "Место, где Макс обнаружил следы...".
+— Для персонажей пропускай безымянных эпизодических людей вроде "старушка", "старик", "мужчина",
+  "женщина", "дворецкий", если это не важная устойчивая роль или повторяющаяся фигура.
+— Не пиши псевдофакты вида "Руди — это персонаж, который, по-видимому, является источником шума
+  или внимания в данной сцене". Если это не самостоятельный факт о персонаже — пропусти.
+— Для `character` не создавай факты из одноразовых сценических реакций и реплик вроде
+  "удивился", "спросил", "посоветовал", "пошутил", "решил объяснить". Такие вещи либо относятся
+  к крупному событию в `event`, либо пропускаются.
+— Для `event` тоже не нужно дробить сцену до каждого микродействия и каждой реплики.
+  Нужны только события, решения, открытия и изменения с последствиями.
+— Не создавай `event`-факты из рутинных логистических эпизодов и пересказов вроде
+  "обед в «Обжоре Бунбу»" или "утренний «подвиг» Макса", если это просто кто-то пошёл обедать
+  или пересказал уже случившееся без нового важного последствия.
 — Для `custom` извлекай только устойчивые элементы мира и быта: именованные напитки, еду,
   одежду, транспорт, институты, профессии, ритуалы и повторяющиеся социальные практики.
 — Для `custom` subject должен быть названием самого обычая/предмета/практики:
@@ -5105,9 +7338,21 @@ COMBINED_PROMPT = """Из фрагмента книги Макса Фрая из
 — Не используй `custom` для разовых сценических деталей, анонимных групп и безымянных описательных
   предметов вроде "ведьмочки" или "полумесяц из плотной ткани с карманами". Если это важно только
   как эпизод сцены, отнеси к `event`; если устойчивого названия нет, пропусти.
+— Не пиши пустые псевдоэнциклопедические определения вроде:
+  "Это место, где...", "Это предмет, который...", "Это миф...", "Это одно из заведений...".
+  Если не можешь сформулировать содержательный факт, пропусти его.
 — Если нечего извлекать — пустые массивы.
 — Верни не более 8 элементов в `dialogues`.
 — Для `knowledge` верни столько полезных фактов, сколько реально помещается в ответ.
+— Внутри `knowledge` используй только ключи `category`, `subject`, `fact`, `time_scope`.
+  Не используй русские ключи вроде `категория`, `имя`, `описание`.
+— Нельзя возвращать wrapper-схемы вроде `{{"characters": [...], "setting": ..., "summary": ...}}`,
+  `{{"plot_summary": ...}}`, `{{"key_events": ...}}` или массивы объектов с полями `name/description`,
+  `entity/type/description`, `character/action/details`, `role/content`. Нужен только плоский массив `knowledge`.
+— Нельзя подменять knowledge общими псевдоопределениями вроде:
+  `Макс Фрай — главный герой, который попадает в новый мир`
+  или `Европа — место действия, где Макс Фрай оказался`.
+  Если модель склоняется к такому каталогу сущностей, верни `[]`.
 
 Верни JSON: {{"dialogues": [...], "knowledge": [...]}}
 НЕ ПИШИ НИЧЕГО, КРОМЕ JSON. НИКАКИХ ОБЪЯСНЕНИЙ ИЛИ ВВОДНЫХ СЛОВ.
@@ -5191,49 +7436,78 @@ def process_chunks_parallel(
                 "regex_stats": {"speech": 0, "silent": 0, "monologue": 0},
                 "used_regex_fallback": False,
             }
-        log_event(f"{tag} старт: {preview_text(chunk, 90)}")
-        chunk_payload, context_meta = build_extraction_chunk_payload(
-            all_chunks if all_chunks is not None else [chunk],
-            idx if all_chunks is not None else 0,
-            config,
-        )
-        regex_source_chunk = chunk
-        dialogue_support_text = ""
-        if all_chunks is not None and config.extraction_neighbor_chunks > 0:
-            regex_source_chunk, dialogue_support_text = build_neighbor_text_window(
-                all_chunks,
-                idx,
-                config.extraction_neighbor_chunks,
+        try:
+            log_event(f"{tag} старт: {preview_text(chunk, 90)}")
+            chunk_payload, context_meta = build_extraction_chunk_payload(
+                all_chunks if all_chunks is not None else [chunk],
+                idx if all_chunks is not None else 0,
+                config,
             )
-
-        regex_dialogues = []
-        regex_stats = {"speech": 0, "silent": 0, "monologue": 0}
-        used_regex_fallback = False
-
-        if do_voice:
-            regex_dialogues, regex_stats = extract_voice_with_regex(
-                regex_source_chunk,
-                log_prefix=f"{tag}[voice]",
-            )
-
-        if do_voice and do_knowledge:
-            if voice_extractor == "llm":
-                d, k = extract_combined(
-                    client,
-                    config,
-                    chunk,
-                    log_prefix=f"{tag}[combined]",
-                    chunk_payload=chunk_payload,
+            regex_source_chunk = chunk
+            dialogue_support_text = ""
+            if all_chunks is not None and config.extraction_neighbor_chunks > 0:
+                regex_source_chunk, dialogue_support_text = build_neighbor_text_window(
+                    all_chunks,
+                    idx,
+                    config.extraction_neighbor_chunks,
                 )
-                if not d and regex_dialogues:
-                    used_regex_fallback = True
-                    log_event(
-                        f"{tag}[voice] подозрительно пусто после LLM, "
-                        f"беру regex-фоллбек ({len(regex_dialogues)} элементов)"
+
+            regex_dialogues = []
+            regex_stats = {"speech": 0, "silent": 0, "monologue": 0}
+            used_regex_fallback = False
+
+            if do_voice:
+                regex_dialogues, regex_stats = extract_voice_with_regex(
+                    regex_source_chunk,
+                    log_prefix=f"{tag}[voice]",
+                )
+
+            if do_voice and do_knowledge:
+                if voice_extractor == "llm":
+                    d, k = extract_combined(
+                        client,
+                        config,
+                        chunk,
+                        log_prefix=f"{tag}[combined]",
+                        chunk_payload=chunk_payload,
                     )
+                    if not d and regex_dialogues:
+                        used_regex_fallback = True
+                        log_event(
+                            f"{tag}[voice] подозрительно пусто после LLM, "
+                            f"беру regex-фоллбек ({len(regex_dialogues)} элементов)"
+                        )
+                        d = regex_dialogues
+                else:
                     d = regex_dialogues
+                    k = extract_knowledge(
+                        client,
+                        config,
+                        chunk,
+                        log_prefix=f"{tag}[knowledge]",
+                        chunk_payload=chunk_payload,
+                    )
+            elif do_voice:
+                if voice_extractor == "llm":
+                    d = extract_dialogues(
+                        client,
+                        config,
+                        chunk,
+                        log_prefix=f"{tag}[voice]",
+                        chunk_payload=chunk_payload,
+                    )
+                    if not d and regex_dialogues:
+                        used_regex_fallback = True
+                        log_event(
+                            f"{tag}[voice] подозрительно пусто после LLM, "
+                            f"беру regex-фоллбек ({len(regex_dialogues)} элементов)"
+                        )
+                        d = regex_dialogues
+                else:
+                    d = regex_dialogues
+                k = []
             else:
-                d = regex_dialogues
+                d = []
                 k = extract_knowledge(
                     client,
                     config,
@@ -5241,44 +7515,31 @@ def process_chunks_parallel(
                     log_prefix=f"{tag}[knowledge]",
                     chunk_payload=chunk_payload,
                 )
-        elif do_voice:
-            if voice_extractor == "llm":
-                d = extract_dialogues(
-                    client,
-                    config,
-                    chunk,
-                    log_prefix=f"{tag}[voice]",
-                    chunk_payload=chunk_payload,
-                )
-                if not d and regex_dialogues:
-                    used_regex_fallback = True
-                    log_event(
-                        f"{tag}[voice] подозрительно пусто после LLM, "
-                        f"беру regex-фоллбек ({len(regex_dialogues)} элементов)"
-                    )
-                    d = regex_dialogues
-            else:
-                d = regex_dialogues
-            k = []
-        else:
-            d = []
-            k = extract_knowledge(
-                client,
-                config,
-                chunk,
-                log_prefix=f"{tag}[knowledge]",
-                chunk_payload=chunk_payload,
-            )
 
-        meta = {
-            "tag": tag,
-            "elapsed": time.time() - item_t0,
-            "regex_stats": regex_stats,
-            "used_regex_fallback": used_regex_fallback,
-            "context_meta": context_meta,
-            "dialogue_support_text": dialogue_support_text,
-        }
-        return idx, chunk, d, k, meta
+            meta = {
+                "tag": tag,
+                "elapsed": time.time() - item_t0,
+                "regex_stats": regex_stats,
+                "used_regex_fallback": used_regex_fallback,
+                "context_meta": context_meta,
+                "dialogue_support_text": dialogue_support_text,
+                "knowledge_source_text": chunk_payload,
+            }
+            return idx, chunk, d, k, meta
+        except GracefulInterrupt:
+            raise
+        except Exception as exc:
+            log_event(f"{tag} внутренняя ошибка обработки чанка: {exc}")
+            return idx, chunk, [], [], {
+                "tag": tag,
+                "elapsed": time.time() - item_t0,
+                "regex_stats": {"speech": 0, "silent": 0, "monologue": 0},
+                "used_regex_fallback": False,
+                "context_meta": {},
+                "dialogue_support_text": "",
+                "knowledge_source_text": chunk,
+                "worker_error": str(exc),
+            }
 
     t_start = time.time()
     completed = already_completed
@@ -5323,6 +7584,7 @@ def process_chunks_parallel(
                 knowledge = validate_knowledge(
                     knowledge,
                     log_prefix=f"{tag}[knowledge]",
+                    source_text=meta.get("knowledge_source_text", chunk),
                 )
 
             elapsed = time.time() - t_start
@@ -5338,16 +7600,19 @@ def process_chunks_parallel(
 
             extra_progress = ""
             if on_chunk_completed is not None:
-                callback_result = on_chunk_completed(
-                    idx=idx,
-                    chunk=chunk,
-                    dialogues=dialogues,
-                    knowledge=knowledge,
-                    meta=meta,
-                    progress=progress,
-                )
-                if callback_result:
-                    extra_progress = str(callback_result)
+                try:
+                    callback_result = on_chunk_completed(
+                        idx=idx,
+                        chunk=chunk,
+                        dialogues=dialogues,
+                        knowledge=knowledge,
+                        meta=meta,
+                        progress=progress,
+                    )
+                    if callback_result:
+                        extra_progress = str(callback_result)
+                except Exception as exc:
+                    log_event(f"{tag} ошибка сохранения результатов чанка: {exc}")
 
             if return_results:
                 all_dialogues.extend(dialogues)
@@ -5360,6 +7625,7 @@ def process_chunks_parallel(
                 sample = f"▸ {knowledge[0].get('subject', '')[:25]}"
 
             fallback_note = " regex-fallback" if meta["used_regex_fallback"] else ""
+            error_note = f" worker-error={meta['worker_error']}" if meta.get("worker_error") else ""
             context_meta = meta.get("context_meta", {})
             context_note = ""
             if context_meta.get("support_chunks", 0):
@@ -5370,7 +7636,7 @@ def process_chunks_parallel(
             log_event(
                 f"{tag} готово [{completed}/{total}]: +{len(dialogues)}d +{len(knowledge)}k "
                 f"за {meta['elapsed']:.1f}s, ETA книги {fmt_duration(eta)}"
-                f"{extra_progress}{context_note}{fallback_note} {sample}".rstrip()
+                f"{extra_progress}{context_note}{fallback_note}{error_note} {sample}".rstrip()
             )
     except KeyboardInterrupt as exc:
         request_stop()
@@ -6306,6 +8572,24 @@ def main() -> int:
                         help="Количество параллельных воркеров (по умолчанию 2)")
     parser.add_argument("--voice-extractor", choices=("regex", "llm"), default="regex",
                         help="Чем извлекать голос Макса: быстрым regex или LLM (по умолчанию regex)")
+    parser.add_argument("--knowledge-protocol", choices=("lines", "json"), default="lines",
+                        help="Формат ответа модели для extraction знаний: lines или json")
+    parser.add_argument("--knowledge-extract-model", default="",
+                        help="Отдельная модель для extraction фактов о мире")
+    parser.add_argument("--knowledge-dual-extraction", dest="knowledge_dual_extraction", action="store_true", default=None,
+                        help="На подозрительных чанках запускать вторую extractor-модель и арбитра")
+    parser.add_argument("--no-knowledge-dual-extraction", dest="knowledge_dual_extraction", action="store_false",
+                        help="Disable dual extraction and arbiter for knowledge extraction")
+    parser.add_argument("--knowledge-extract-model-secondary", default=Config.knowledge_extract_model_secondary,
+                        help="Вторая модель для fallback extraction фактов на подозрительных чанках")
+    parser.add_argument("--knowledge-arbiter-model", default="",
+                        help="Модель-арбитр для сравнения кандидатов от двух extractor-моделей")
+    parser.add_argument("--knowledge-validate-model", default="",
+                        help="Отдельная модель для LLM-валидации автономности фактов")
+    parser.add_argument("--knowledge-link-model", default="",
+                        help="Отдельная модель для linking и дедупликации фактов")
+    parser.add_argument("--no-llm-knowledge-validation", action="store_true",
+                        help="Отключить второй LLM-этап валидации автономности фактов")
     parser.add_argument("--request-timeout", type=int, default=180,
                         help="Таймаут одного запроса к модели в секундах (по умолчанию 180)")
     parser.add_argument("--seed", type=int, default=42,
@@ -6326,6 +8610,17 @@ def main() -> int:
         chunk_size=args.chunk_size,
         request_timeout=args.request_timeout,
     )
+    config.knowledge_extraction_protocol = args.knowledge_protocol
+    config.knowledge_extract_model = args.knowledge_extract_model
+    if args.knowledge_dual_extraction is None:
+        config.knowledge_dual_extraction_enabled = Config.knowledge_dual_extraction_enabled
+    else:
+        config.knowledge_dual_extraction_enabled = args.knowledge_dual_extraction
+    config.knowledge_extract_model_secondary = args.knowledge_extract_model_secondary
+    config.knowledge_arbiter_model = args.knowledge_arbiter_model
+    config.knowledge_validate_model = args.knowledge_validate_model
+    config.knowledge_link_model = args.knowledge_link_model
+    config.knowledge_llm_validation_enabled = not args.no_llm_knowledge_validation
 
     # Создаём папку для результатов
     Path(config.output_dir).mkdir(parents=True, exist_ok=True)
@@ -6341,6 +8636,13 @@ def main() -> int:
         "updated_at": now_iso_str(),
         "seed": args.seed,
         "model": config.model,
+        "knowledge_extraction_protocol": config.knowledge_extraction_protocol,
+        "knowledge_extract_model": config.knowledge_extract_model or config.model,
+        "knowledge_dual_extraction_enabled": config.knowledge_dual_extraction_enabled,
+        "knowledge_extract_model_secondary": config.knowledge_extract_model_secondary or None,
+        "knowledge_arbiter_model": config.knowledge_arbiter_model or config.model,
+        "knowledge_validate_model": config.knowledge_validate_model or config.model,
+        "knowledge_link_model": config.knowledge_link_model or config.model,
         "books_dir": config.books_dir,
         "output_dir": config.output_dir,
         "chunk_size": config.chunk_size,
@@ -6350,6 +8652,9 @@ def main() -> int:
         "llm_trace_enabled": config.llm_trace_enabled,
         "llm_trace_run_id": config.llm_trace_run_id,
         "extraction_passes": config.extraction_passes,
+        "knowledge_extraction_tracks": [name for name, _ in iter_knowledge_extraction_tracks(config)],
+        "knowledge_llm_validation_enabled": config.knowledge_llm_validation_enabled,
+        "knowledge_validation_context_tokens": config.knowledge_validation_context_tokens,
         "extraction_neighbor_chunks": config.extraction_neighbor_chunks,
         "extraction_neighbor_excerpt_tokens": config.extraction_neighbor_excerpt_tokens,
         "extraction_context_budget": config.extraction_context_budget,
@@ -6609,6 +8914,10 @@ def main() -> int:
 
                 if loaded_knowledge:
                     loaded_knowledge = ensure_knowledge_source_defaults(loaded_knowledge, book_name)
+                    loaded_knowledge = validate_knowledge(
+                        loaded_knowledge,
+                        log_prefix=f"[reload {get_book_stem(book_name)}]",
+                    )
                     loaded_knowledge = canonicalize_book_knowledge(loaded_knowledge, narrator)
                     all_knowledge.extend(loaded_knowledge)
                     normalized_book_knowledge = deduplicate_knowledge(loaded_knowledge)

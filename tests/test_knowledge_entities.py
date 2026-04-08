@@ -405,6 +405,48 @@ class KnowledgeEntityResolutionTest(unittest.TestCase):
         self.assertIn('"time_scope"', ed.KNOWLEDGE_PROMPT)
         self.assertIn('"time_scope"', ed.COMBINED_PROMPT)
         self.assertIn('time_scope:', ed.KNOWLEDGE_LINK_PROMPT)
+        self.assertIn('Не выдумывай новые имена, фамилии, инициалы', ed.KNOWLEDGE_PROMPT)
+        self.assertIn('нельзя писать "Обжор"', ed.KNOWLEDGE_PROMPT)
+        self.assertIn('старушка', ed.KNOWLEDGE_PROMPT)
+        self.assertIn('Это место, где...', ed.KNOWLEDGE_PROMPT)
+        self.assertIn('В центре гостиной стоял...', ed.KNOWLEDGE_PROMPT)
+        self.assertIn('обед в «Обжоре Бунбу»', ed.KNOWLEDGE_PROMPT)
+        self.assertIn('утренний «подвиг» Макса', ed.KNOWLEDGE_PROMPT)
+        self.assertIn('Руди — это персонаж', ed.KNOWLEDGE_PROMPT)
+        self.assertIn('wrapper-схемы', ed.KNOWLEDGE_PROMPT)
+        self.assertIn('name/description', ed.KNOWLEDGE_PROMPT)
+        self.assertIn('entity/type/description', ed.KNOWLEDGE_PROMPT)
+        self.assertIn('Макс Фрай — главный герой, который попадает в новый мир', ed.KNOWLEDGE_PROMPT)
+        self.assertIn('Европа — место действия, где Макс Фрай оказался', ed.KNOWLEDGE_PROMPT)
+        self.assertIn('нельзя писать "Обжор"', ed.COMBINED_PROMPT)
+        self.assertIn('В центре гостиной стоял...', ed.COMBINED_PROMPT)
+        self.assertIn('обед в «Обжоре Бунбу»', ed.COMBINED_PROMPT)
+        self.assertIn('wrapper-схемы', ed.COMBINED_PROMPT)
+        self.assertIn('entity/type/description', ed.COMBINED_PROMPT)
+        self.assertIn('Макс Фрай — главный герой, который попадает в новый мир', ed.COMBINED_PROMPT)
+        self.assertIn('Два друга', ed.KNOWLEDGE_PROMPT_V2)
+        self.assertIn('Королевский двор — Королевский двор', ed.KNOWLEDGE_PROMPT_V2)
+        self.assertIn('В тексте не упоминается', ed.KNOWLEDGE_PROMPT_V2)
+        self.assertIn('character', ed.KNOWLEDGE_PROMPT_V2)
+        self.assertIn('упоминается в контексте', ed.KNOWLEDGE_PROMPT_V2)
+        self.assertIn('не раскрывается', ed.KNOWLEDGE_PROMPT_V2)
+        self.assertIn('Луукфи Пэнц — упоминается в контексте событий, но не раскрывается', ed.KNOWLEDGE_PROMPT_V2)
+        self.assertIn('Король', ed.KNOWLEDGE_PROMPT_V2)
+        self.assertIn('PRECISION FIRST', ed.KNOWLEDGE_PROMPT_V2)
+        self.assertIn('НЕ превращай фразы в псевдоэнциклопедию вида `Макс — персонаж, который...`', ed.KNOWLEDGE_PROMPT_V2)
+        self.assertIn('Холоми — В Холоми невозможно колдовать', ed.KNOWLEDGE_PROMPT_V2)
+        self.assertIn('Кимпа — Кимпа был гонщиком', ed.KNOWLEDGE_PROMPT_V2)
+        self.assertIn('Джуффин Халли сообщил, что обнаружил невидимое чудо', ed.KNOWLEDGE_PROMPT_V2)
+        self.assertIn('Fact должен быть сфокусирован на своём subject', ed.KNOWLEDGE_LINE_PROMPT_V3)
+        self.assertIn('Сэр Шурф унес Мелифаро под мышкой', ed.KNOWLEDGE_LINE_PROMPT_V3)
+        self.assertIn('Макс заявил, что будет коллекционировать амобилеры', ed.KNOWLEDGE_LINE_PROMPT_V3)
+        self.assertIn('keep', ed.KNOWLEDGE_VALIDATE_PROMPT)
+        self.assertIn('drop', ed.KNOWLEDGE_VALIDATE_PROMPT)
+        self.assertIn('КАНДИДАТЫ', ed.KNOWLEDGE_VALIDATE_PROMPT)
+        self.assertIn('subject и fact не совпадают по фокусу', ed.KNOWLEDGE_VALIDATE_PROMPT)
+        self.assertIn('Сэр Шурф унес Мелифаро под мышкой', ed.KNOWLEDGE_VALIDATE_PROMPT)
+        self.assertIn('invented subject вроде `Странствие по дому`', ed.KNOWLEDGE_ARBITER_PROMPT)
+        self.assertIn('Джуффин Халли приказал Максу и Шурфу посетить «Обжору Бунба»', ed.KNOWLEDGE_ARBITER_PROMPT)
 
     def test_build_scene_glossary_collects_known_entities(self):
         glossary = ed.build_scene_glossary(
@@ -433,6 +475,130 @@ class KnowledgeEntityResolutionTest(unittest.TestCase):
 
         self.assertEqual(validated[0]["time_scope"], "ended")
         self.assertEqual(validated[1]["time_scope"], "timeless")
+
+    def test_validate_knowledge_drops_meta_subjects_tautologies_and_scene_noise(self):
+        validated = ed.validate_knowledge([
+            {
+                "category": "character",
+                "subject": "Два друга",
+                "fact": "Два друга, видимо, были в состоянии, когда им было необходимо, чтобы их оставили в покое.",
+            },
+            {
+                "category": "character",
+                "subject": "Два персонажа",
+                "fact": "Один из них — Джулиан, другой — Макс.",
+            },
+            {
+                "category": "event",
+                "subject": "Действие",
+                "fact": "Действие, которое совершает Макс, чтобы отвлечь внимание.",
+            },
+            {
+                "category": "character",
+                "subject": "Генерал",
+                "fact": "Персонаж, который был замешан в интригах.",
+            },
+            {
+                "category": "character",
+                "subject": "character",
+                "fact": "Помогает Максу, когда тот в беде, и заботится о его безопасности.",
+            },
+            {
+                "category": "magic",
+                "subject": "Безмолвная речь",
+                "fact": "Безмолвная речь собаки передала Максу, что он должен быть осторожен.",
+            },
+            {
+                "category": "place",
+                "subject": "Королевский двор",
+                "fact": "Королевский двор",
+            },
+            {
+                "category": "custom",
+                "subject": "Кошки",
+                "fact": "Особый интерес к кошкам, который был предметом обсуждения.",
+            },
+            {
+                "category": "place",
+                "subject": "Стол",
+                "fact": "В тексте не упоминается.",
+            },
+            {
+                "category": "custom",
+                "subject": "Странный",
+                "fact": "Предмет, который был замечен.",
+            },
+            {
+                "category": "custom",
+                "subject": "Телефон",
+                "fact": "В тексте не упоминается.",
+            },
+            {
+                "category": "custom",
+                "subject": "Энциклопедия",
+                "fact": "Энциклопедия",
+            },
+            {
+                "category": "character",
+                "subject": "мадам",
+                "fact": "Мадам (вероятно, имеется в виду персонаж, который подает камра)",
+            },
+            {
+                "category": "custom",
+                "subject": "пояс",
+                "fact": "Пояса, которые носил убитый, не делают нигде, по словам Кофы.",
+            },
+            {
+                "category": "place",
+                "subject": "сарайчик",
+                "fact": "В конце сада находится небольшой нарядный сарайчик.",
+            },
+            {
+                "category": "magic",
+                "subject": "Безмолвная речь",
+                "fact": "Безмолвная речь — обычный способ общения на расстоянии.",
+            },
+            {
+                "category": "place",
+                "subject": "Королевский двор",
+                "fact": "Королевский двор служит резиденцией короля.",
+            },
+        ])
+
+        subjects = [item["subject"] for item in validated]
+        self.assertEqual(subjects, ["Безмолвная речь", "Королевский двор"])
+
+    def test_validate_knowledge_drops_context_only_and_uncertain_summaries(self):
+        validated = ed.validate_knowledge([
+            {
+                "category": "character",
+                "subject": "Джуффин Халли",
+                "fact": "Упоминается в контексте событий, хотя его прямые действия в данном отрывке не детализированы.",
+            },
+            {
+                "category": "character",
+                "subject": "Леди",
+                "fact": "Леди (вероятно, Леди, с которой общался рассказчик) была в курсе событий, связанных с поиском.",
+            },
+            {
+                "category": "character",
+                "subject": "Король",
+                "fact": "Король, видимо, был в состоянии, когда ему было необходимо, чтобы его оставили в покое.",
+            },
+            {
+                "category": "character",
+                "subject": "Посыльный",
+                "fact": "Посыльный — персонаж, который не упоминается в данном отрывке.",
+            },
+            {
+                "category": "character",
+                "subject": "Гуриг VIII",
+                "fact": "Гуриг VIII является королем Соединенного Королевства.",
+            },
+        ])
+
+        self.assertEqual(len(validated), 1)
+        self.assertEqual(validated[0]["subject"], "Гуриг VIII")
 
 
     def test_contradicting_or_time_shifted_facts_are_not_treated_as_duplicates(self):

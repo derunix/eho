@@ -27,6 +27,24 @@ class LLMExtractionPipelineSmokeTest(unittest.TestCase):
     def setUp(self):
         ed._STOP_REQUESTED.clear()
 
+    def test_parse_knowledge_line_protocol_accepts_category_as_field_name(self):
+        response = (
+            "character=Кимпа | fact=Кимпа служит дворецким дома Джуффина. | time_scope=timeless\n"
+            "place: Дом у Моста | fact: Дом у Моста служит штабом Тайного Сыска. | time_scope: timeless\n"
+        )
+
+        items, strategy = ed.parse_knowledge_line_protocol(
+            response,
+            log_prefix="[test-line-protocol]",
+        )
+
+        self.assertEqual(strategy, "line_protocol")
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["category"], "character")
+        self.assertEqual(items[0]["subject"], "Кимпа")
+        self.assertEqual(items[1]["category"], "place")
+        self.assertEqual(items[1]["subject"], "Дом у Моста")
+
     def test_update_metadata_snapshot_writes_incrementally(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             metadata_path = Path(tmpdir) / "metadata.json"
@@ -200,6 +218,740 @@ class LLMExtractionPipelineSmokeTest(unittest.TestCase):
         self.assertEqual(len(pairs), 1)
         self.assertIn("Если ты сейчас скажешь, что это хорошая идея", pairs[0]["messages"][-1]["content"])
 
+    def test_validate_knowledge_skips_non_dict_items(self):
+        items = [
+            "мусор",
+            123,
+            {
+                "category": "event",
+                "subject": "Макс",
+                "fact": "Макс вошел в Дом у Моста.",
+                "time_scope": "current",
+            },
+        ]
+
+        validated = ed.validate_knowledge(items)
+
+        self.assertEqual(len(validated), 1)
+        self.assertEqual(validated[0]["subject"], "Макс")
+        self.assertEqual(validated[0]["category"], "event")
+
+    def test_extract_knowledge_does_not_crash_on_non_object_json_items(self):
+        config = ed.Config()
+        config.knowledge_llm_validation_enabled = False
+
+        with mock.patch.object(ed, "call_llm", return_value='["не факт"]'):
+            result = ed.extract_knowledge(
+                client=object(),
+                config=config,
+                chunk="Тестовый фрагмент",
+                log_prefix="[test-knowledge]",
+            )
+
+        self.assertEqual(result, [])
+
+    def test_extract_knowledge_aggregates_world_and_scene_tracks(self):
+        config = ed.Config(
+            extraction_passes=1,
+            knowledge_extraction_tracks=("world", "scene"),
+        )
+        config.knowledge_llm_validation_enabled = False
+
+        def fake_call_llm(client, config, system, user, **kwargs):
+            if "WORLD_FACTS" in user:
+                return json.dumps([
+                    {
+                        "category": "place",
+                        "subject": "Дом у Моста",
+                        "fact": "Дом у Моста служит штабом Тайного Сыска.",
+                        "time_scope": "timeless",
+                    }
+                ], ensure_ascii=False)
+            if "SCENE_FACTS" in user:
+                return json.dumps([
+                    {
+                        "category": "event",
+                        "subject": "Макс",
+                        "fact": "Макс поднимается на крышу Дома у Моста.",
+                        "time_scope": "current",
+                    }
+                ], ensure_ascii=False)
+            self.fail(f"Unexpected knowledge prompt: {user[:200]}")
+
+        with mock.patch.object(ed, "call_llm", side_effect=fake_call_llm):
+            result = ed.extract_knowledge(
+                client=object(),
+                config=config,
+                chunk="Макс поднимается на крышу Дома у Моста.",
+                log_prefix="[test-tracks]",
+            )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["category"], "event")
+        self.assertEqual(result[0]["subject"], "Макс")
+
+    def test_extract_knowledge_scene_pagination_is_independent_from_world_track(self):
+        config = ed.Config(
+            extraction_passes=2,
+            knowledge_extraction_tracks=("world", "scene"),
+        )
+        config.knowledge_llm_validation_enabled = False
+        config.knowledge_dual_extraction_enabled = False
+        track_page_counters = {
+            "world": 0,
+            "scene": 0,
+        }
+
+        def fake_call_llm(client, config, system, user, **kwargs):
+            if "MODE: WORLD_FACTS" in user:
+                track_page_counters["world"] += 1
+                is_second_page = track_page_counters["world"] > 1
+                if not is_second_page:
+                    return (
+                        "category=place | subject=Дом у Моста | "
+                        "fact=Дом у Моста служит штабом Тайного Сыска. | time_scope=timeless"
+                    )
+                return ""
+            if "MODE: SCENE_FACTS" in user:
+                track_page_counters["scene"] += 1
+                is_second_page = track_page_counters["scene"] > 1
+                if not is_second_page:
+                    return (
+                        "category=event | subject=Макс | "
+                        "fact=Макс входит в Дом у Моста и замечает странную тишину. | "
+                        "time_scope=current"
+                    )
+                return (
+                    "category=event | subject=Джуффин Халли | "
+                    "fact=Джуффин Халли приказывает Максу немедленно подняться наверх. | "
+                    "time_scope=current"
+                )
+            self.fail(f"Unexpected knowledge prompt: {user[:200]}")
+
+        with mock.patch.object(ed, "call_llm", side_effect=fake_call_llm):
+            result = ed.extract_knowledge(
+                client=object(),
+                config=config,
+                chunk="Макс входит в Дом у Моста. Джуффин Халли велит ему подняться наверх.",
+                log_prefix="[test-track-pagination]",
+            )
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual({item["subject"] for item in result}, {"Макс", "Джуффин Халли"})
+
+    def test_extract_knowledge_runs_secondary_and_arbiter_on_suspicious_chunk(self):
+        config = ed.Config(
+            extraction_passes=1,
+            knowledge_extraction_tracks=("world",),
+        )
+        config.knowledge_llm_validation_enabled = False
+        config.knowledge_extract_model = "primary-model"
+        config.knowledge_dual_extraction_enabled = True
+        config.knowledge_extract_model_secondary = "secondary-model"
+        config.knowledge_arbiter_model = "arbiter-model"
+
+        calls = {
+            "primary": 0,
+            "secondary": 0,
+            "arbiter": 0,
+        }
+
+        chunk = (
+            "Дом у Моста служит штабом Тайного Сыска. "
+            "Кимпа был старым дворецким дома Джуффина."
+        )
+
+        def fake_call_llm(client, config, system, user, **kwargs):
+            model_override = kwargs.get("model_override")
+            if system == ed.KNOWLEDGE_ARBITER_SYSTEM:
+                calls["arbiter"] += 1
+                self.assertIn("Кимпа", user)
+                self.assertIn("Дом у Моста", user)
+                return "1 keep\n2 keep"
+            if model_override == "primary-model":
+                calls["primary"] += 1
+                return (
+                    "category=place | subject=Дом у Моста | "
+                    "fact=Дом у Моста служит штабом Тайного Сыска. | time_scope=timeless"
+                )
+            if model_override == "secondary-model":
+                calls["secondary"] += 1
+                return (
+                    "category=character | subject=Кимпа | "
+                    "fact=Кимпа был старым дворецким дома Джуффина. | time_scope=timeless"
+                )
+            self.fail(f"Unexpected LLM call: {system[:60]} / {model_override}")
+
+        with mock.patch.object(ed, "call_llm", side_effect=fake_call_llm):
+            result = ed.extract_knowledge(
+                client=object(),
+                config=config,
+                chunk=chunk,
+                log_prefix="[test-ensemble]",
+            )
+
+        self.assertEqual(calls["primary"], 1)
+        self.assertEqual(calls["secondary"], 1)
+        self.assertEqual(calls["arbiter"], 1)
+        self.assertEqual(len(result), 2)
+        self.assertEqual({item["subject"] for item in result}, {"Дом у Моста", "Кимпа"})
+
+    def test_extract_knowledge_skips_secondary_when_primary_is_healthy(self):
+        config = ed.Config(
+            extraction_passes=1,
+            knowledge_extraction_tracks=("world",),
+        )
+        config.knowledge_llm_validation_enabled = False
+        config.knowledge_extract_model = "primary-model"
+        config.knowledge_dual_extraction_enabled = True
+        config.knowledge_extract_model_secondary = "secondary-model"
+        config.knowledge_arbiter_model = "arbiter-model"
+
+        calls = {
+            "primary": 0,
+            "secondary": 0,
+            "arbiter": 0,
+        }
+
+        chunk = (
+            "Дом у Моста служит штабом Тайного Сыска. "
+            "Кимпа был старым дворецким дома Джуффина. "
+            "Макс не мог спать по ночам с детства."
+        )
+
+        def fake_call_llm(client, config, system, user, **kwargs):
+            model_override = kwargs.get("model_override")
+            if system == ed.KNOWLEDGE_ARBITER_SYSTEM:
+                calls["arbiter"] += 1
+                return "1 keep"
+            if model_override == "primary-model":
+                calls["primary"] += 1
+                return "\n".join([
+                    "category=place | subject=Дом у Моста | fact=Дом у Моста служит штабом Тайного Сыска. | time_scope=timeless",
+                    "category=character | subject=Кимпа | fact=Кимпа был старым дворецким дома Джуффина. | time_scope=timeless",
+                    "category=character | subject=Макс | fact=Макс не мог спать по ночам с детства. | time_scope=past",
+                ])
+            if model_override == "secondary-model":
+                calls["secondary"] += 1
+                return ""
+            self.fail(f"Unexpected LLM call: {system[:60]} / {model_override}")
+
+        with mock.patch.object(ed, "call_llm", side_effect=fake_call_llm):
+            result = ed.extract_knowledge(
+                client=object(),
+                config=config,
+                chunk=chunk,
+                log_prefix="[test-no-secondary]",
+            )
+
+        self.assertEqual(calls["primary"], 1)
+        self.assertEqual(calls["secondary"], 0)
+        self.assertEqual(calls["arbiter"], 0)
+        self.assertEqual(len(result), 3)
+
+    def test_arbiter_can_rewrite_candidate_into_autonomous_fact(self):
+        config = ed.Config()
+        config.knowledge_arbiter_model = "arbiter-model"
+
+        candidates = [
+            {
+                "category": "character",
+                "subject": "Кимпа",
+                "fact": "Кимпа был строго предупрежден хозяином, что должен встретить Макса по первому разряду.",
+                "time_scope": "past",
+                "_ensemble_source": "secondary",
+            }
+        ]
+        chunk = "Кимпа был старым дворецким дома Джуффина."
+
+        def fake_call_llm(client, config, system, user, **kwargs):
+            self.assertEqual(system, ed.KNOWLEDGE_ARBITER_SYSTEM)
+            self.assertIn("Кимпа", user)
+            return (
+                "1 rewrite | category=character | subject=Кимпа | "
+                "fact=Кимпа был старым дворецким дома Джуффина. | time_scope=timeless"
+            )
+
+        with mock.patch.object(ed, "call_llm", side_effect=fake_call_llm):
+            resolved = ed.arbiter_resolve_knowledge_candidates_with_llm(
+                client=object(),
+                config=config,
+                candidates=candidates,
+                chunk=chunk,
+                log_prefix="[test-arbiter-rewrite]",
+            )
+
+        self.assertEqual(len(resolved), 1)
+        self.assertEqual(resolved[0]["subject"], "Кимпа")
+        self.assertEqual(resolved[0]["time_scope"], "timeless")
+        self.assertIn("дворецким", resolved[0]["fact"])
+
+    def test_extract_knowledge_recovers_wrapper_object_schema(self):
+        config = ed.Config(
+            extraction_passes=1,
+            knowledge_extraction_tracks=("world",),
+        )
+        config.knowledge_llm_validation_enabled = False
+
+        def fake_call_llm(client, config, system, user, **kwargs):
+            return json.dumps(
+                {
+                    "characters": [
+                        {
+                            "name": "Макс",
+                            "description": "Макс впервые оказывается в Ехо.",
+                        },
+                        {
+                            "name": "Сэр Джуффин",
+                            "description": "Сэр Джуффин помогает Максу советами.",
+                        },
+                    ],
+                    "key_events": [
+                        {
+                            "event": "Прибытие Макса в Ехо",
+                            "details": "Макс впервые оказывается в Ехо.",
+                        }
+                    ],
+                    "summary": "Не должно использоваться напрямую как факт.",
+                },
+                ensure_ascii=False,
+            )
+
+        with mock.patch.object(ed, "call_llm", side_effect=fake_call_llm):
+            result = ed.extract_knowledge(
+                client=object(),
+                config=config,
+                chunk="Макс впервые оказывается в Ехо.",
+                log_prefix="[test-wrapper-schema]",
+            )
+
+        self.assertEqual(len(result), 2)
+        event_subjects = {
+            item["subject"]
+            for item in result
+            if item["category"] == "event"
+        }
+        self.assertIn("Прибытие Макса в Ехо", event_subjects)
+
+    def test_coerce_knowledge_payload_recovers_action_details_schema(self):
+        payload = [
+            {
+                "character": "Макс",
+                "action": "пытается понять происходящее.",
+                "details": "Он чувствует себя потерянным и постепенно адаптируется.",
+            }
+        ]
+
+        result = ed.coerce_knowledge_payload_to_items(payload)
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["category"], "character")
+        self.assertEqual(result[0]["subject"], "Макс")
+        self.assertIn("адаптируется", result[0]["fact"])
+
+    def test_coerce_knowledge_payload_ignores_weak_root_entity_catalog_schema(self):
+        payload = [
+            {
+                "entity": "Европа",
+                "type": "место",
+                "description": "Место действия, где Макс Фрай оказался.",
+            }
+        ]
+
+        result = ed.coerce_knowledge_payload_to_items(payload)
+
+        self.assertEqual(result, [])
+
+    def test_validate_knowledge_drops_entity_catalog_noise_and_keeps_grounded_fact(self):
+        payload = [
+            {
+                "entity": "Макс Фрай",
+                "type": "персонаж",
+                "description": "Главный герой, который попадает в новый мир.",
+            },
+            {
+                "entity": "Европа",
+                "type": "место",
+                "description": "Место действия, где Макс Фрай оказался.",
+            },
+            {
+                "entity": "Кимпа",
+                "type": "персонаж",
+                "description": "Старый дворецкий дома Джуффина Халли.",
+            },
+        ]
+        source_text = (
+            "[PRIMARY CHUNK]\n"
+            "Когда я впервые очутился в доме сэра Джуффина Халли, его самого не оказалось на месте. "
+            "Старый дворецкий Кимпа был немало озадачен. "
+            "[SCENE GLOSSARY]\n"
+            "- character: Джуффин Халли\n"
+            "- character: Макс\n"
+            "- place: Ехо\n"
+        )
+
+        candidates = ed.coerce_knowledge_payload_to_items(payload)
+        validated = ed.validate_knowledge(candidates, source_text=source_text)
+
+        self.assertEqual(len(validated), 1)
+        self.assertEqual(validated[0]["subject"], "Кимпа")
+        self.assertIn("дворецкий", validated[0]["fact"])
+
+    def test_validate_knowledge_rejects_ungrounded_subject(self):
+        items = [
+            {
+                "category": "place",
+                "subject": "Европа",
+                "fact": "Европа расположена далеко от Ехо.",
+            }
+        ]
+
+        validated = ed.validate_knowledge(
+            items,
+            source_text="[PRIMARY CHUNK]\nМакс прибыл в Ехо и встретил Джуффина.\n[SCENE GLOSSARY]\n- place: Ехо\n",
+        )
+
+        self.assertEqual(validated, [])
+
+    def test_validate_knowledge_rejects_fact_grounded_only_in_supporting_context(self):
+        items = [
+            {
+                "category": "character",
+                "subject": "Макс",
+                "fact": "Макс не мог спать по ночам с младенчества.",
+            }
+        ]
+
+        source_text = (
+            "[PRIMARY CHUNK #2]\n"
+            "Кимпа встретил меня в холле и молча поклонился.\n\n"
+            "[SUPPORTING CONTEXT]\n"
+            "[SUPPORTING PREV CHUNK #1 | excerpt]\n"
+            "С младенческих лет я не мог спать по ночам.\n"
+        )
+
+        validated = ed.validate_knowledge(items, source_text=source_text)
+
+        self.assertEqual(validated, [])
+
+    def test_fact_tokens_grounded_in_primary_rejects_unrelated_summary_fact(self):
+        primary = (
+            "Сэр Джуффин Халли хлопнул Макса между лопаток. "
+            "В Соединенном Королевстве это допустимо только между ближайшими друзьями."
+        )
+
+        self.assertFalse(
+            ed.fact_tokens_grounded_in_primary(
+                "В Ехо архитектура приемлет исключительно приземистые и просторные здания.",
+                primary,
+                category="place",
+                subject="Ехо",
+            )
+        )
+
+    def test_validate_knowledge_rejects_subject_fact_focus_mismatch(self):
+        items = [
+            {
+                "category": "character",
+                "subject": "Макс",
+                "fact": "Сэр Джуффин Халли предложил Максу помощь в трудоустройстве.",
+            }
+        ]
+
+        source_text = (
+            "[PRIMARY CHUNK]\n"
+            "Сэр Джуффин Халли предложил Максу помощь в трудоустройстве.\n"
+        )
+
+        validated = ed.validate_knowledge(items, source_text=source_text)
+
+        self.assertEqual(validated, [])
+
+    def test_validate_knowledge_items_with_llm_drops_non_autonomous_facts(self):
+        config = ed.Config()
+        items = [
+            {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Дом у Моста служит штабом Тайного Сыска.",
+                "time_scope": "timeless",
+            },
+            {
+                "category": "character",
+                "subject": "Джуффин Халли",
+                "fact": "Джуффин Халли удивился зову, спросив: «Кому это приспичило?»",
+                "time_scope": "current",
+            },
+        ]
+
+        def fake_call_llm(client, config, system, user, **kwargs):
+            self.assertIn("PRIMARY CHUNK", user)
+            self.assertIn("Дом у Моста служит штабом Тайного Сыска.", user)
+            return json.dumps(
+                [
+                    {"idx": 1, "decision": "keep", "reason": "standalone"},
+                    {"idx": 2, "decision": "drop", "reason": "too local"},
+                ],
+                ensure_ascii=False,
+            )
+
+        with mock.patch.object(ed, "call_llm", side_effect=fake_call_llm):
+            validated = ed.validate_knowledge_items_with_llm(
+                client=object(),
+                config=config,
+                items=items,
+                chunk="Дом у Моста был штабом, а Джуффин удивился зову.",
+                log_prefix="[test-llm-validate]",
+            )
+
+        self.assertEqual(len(validated), 1)
+        self.assertEqual(validated[0]["subject"], "Дом у Моста")
+
+    def test_merge_knowledge_items_keeps_distinct_facts_during_extraction(self):
+        existing = [
+            {
+                "category": "character",
+                "subject": "Шурф Лонли-Локли",
+                "fact": "Шурф носит Перчатки Смерти.",
+                "time_scope": "timeless",
+            }
+        ]
+        new_items = [
+            {
+                "category": "character",
+                "subject": "Шурф Лонли-Локли",
+                "fact": "Шурф носит тюрбан.",
+                "time_scope": "current",
+            }
+        ]
+
+        merged, added = ed.merge_knowledge_items(existing, new_items)
+
+        self.assertEqual(added, 1)
+        self.assertEqual(len(merged), 2)
+
+    def test_parse_json_response_repairs_unescaped_quotes_in_strings(self):
+        response = (
+            '[{"category": "place", "subject": "Дом", '
+            '"fact": "Место, где происходят события, возможно, в контексте "Дома у Моста"."}]'
+        )
+
+        data, strategy = ed.parse_json_response(response, expect="array")
+
+        self.assertIsInstance(data, list)
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["subject"], "Дом")
+        self.assertIn("Дома у Моста", data[0]["fact"])
+        self.assertIn("repair_quotes", strategy)
+
+    def test_parse_json_response_recovers_partial_truncated_array(self):
+        response = (
+            '[{"category":"character","subject":"Мелифаро","fact":"Мелифаро любит яркую одежду."},'
+            '{"category":"place","subject":"Дом у Моста","fact":"Дом у Моста является важным местом."},'
+            '{"category":"event","subject":"Макс","fact":"Макс'
+        )
+
+        data, strategy = ed.parse_json_response(response, expect="array")
+
+        self.assertIsInstance(data, list)
+        self.assertEqual(len(data), 2)
+        self.assertEqual(data[0]["subject"], "Мелифаро")
+        self.assertEqual(data[1]["subject"], "Дом у Моста")
+        self.assertIn("partial_array", strategy)
+
+    def test_validate_knowledge_normalizes_russian_schema_keys(self):
+        items = [
+            {
+                "категория": "персонаж",
+                "имя": "Мелифаро",
+                "описание": "Мелифаро любит яркую одежду.",
+                "время": "timeless",
+            }
+        ]
+
+        validated = ed.validate_knowledge(items)
+
+        self.assertEqual(len(validated), 1)
+        self.assertEqual(validated[0]["category"], "character")
+        self.assertEqual(validated[0]["subject"], "Мелифаро")
+        self.assertEqual(validated[0]["fact"], "Мелифаро любит яркую одежду.")
+        self.assertEqual(validated[0]["time_scope"], "timeless")
+
+    def test_validate_knowledge_normalizes_extended_category_aliases(self):
+        items = [
+            {
+                "type": "historical_period",
+                "entity": "Эпоха Кодекса",
+                "description": "Эпоха Кодекса началась после принятия Кодекса Хрембера.",
+            }
+        ]
+
+        validated = ed.validate_knowledge(items)
+
+        self.assertEqual(len(validated), 1)
+        self.assertEqual(validated[0]["category"], "history")
+        self.assertEqual(validated[0]["subject"], "Эпоха Кодекса")
+
+    def test_validate_knowledge_drops_generic_entity_descriptions(self):
+        items = [
+            {
+                "category": "character",
+                "subject": "Мелифаро",
+                "fact": "Персонаж, который присутствует в сцене.",
+            },
+            {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Место, где происходят события.",
+            },
+            {
+                "category": "custom",
+                "subject": "Обжор",
+                "fact": "Это место, где персонажи заказывают еду и напитки.",
+            },
+            {
+                "category": "magic",
+                "subject": "Дитя Багровой Жемчужины Гурига VII",
+                "fact": "Это миф, то, чего нет, и его обнаружил мудрый старый Магистр.",
+            },
+        ]
+
+        validated = ed.validate_knowledge(items)
+
+        self.assertEqual(validated, [])
+
+    def test_validate_knowledge_drops_generic_or_ephemeral_character_facts(self):
+        items = [
+            {
+                "category": "character",
+                "subject": "старушка",
+                "fact": "старушка наблюдательна и умеет замечать, что говор человека не является столичным.",
+            },
+            {
+                "category": "character",
+                "subject": "Джуффин Халли",
+                "fact": "Джуффин Халли удивился зову, спросив: «Кому это приспичило?»",
+            },
+            {
+                "category": "character",
+                "subject": "Джуффин Халли",
+                "fact": "Джуффин Халли посоветовал сэру Максу ограничить зону своей разрушительной деятельности этим кабинетом.",
+            },
+            {
+                "category": "character",
+                "subject": "Кимпа",
+                "fact": "Кимпа был строго предупрежден хозяином, что должен встретить Макса по первому разряду.",
+            },
+            {
+                "category": "character",
+                "subject": "Кимпа",
+                "fact": "Кимпа помог Максу одеться, чтобы тот выглядел пристойно для коренного жителя Ехо.",
+            },
+            {
+                "category": "character",
+                "subject": "Сэр Шурф Лонли-Локли",
+                "fact": "Фамилия Сэр Шурф Лонли-Локли состоит из десятка букв.",
+            },
+            {
+                "category": "character",
+                "subject": "Сэр Шурф Лонли-Локли",
+                "fact": "Сэр Шурф Лонли-Локли потребовал от Мелифаро запомнить его фамилию.",
+            },
+        ]
+
+        validated = ed.validate_knowledge(items)
+
+        self.assertEqual(validated, [])
+
+    def test_validate_knowledge_drops_scene_summary_noise(self):
+        items = [
+            {
+                "category": "character",
+                "subject": "Руди",
+                "fact": "Руди — это персонаж, который, по-видимому, является источником шума или внимания в данной сцене.",
+            },
+            {
+                "category": "place",
+                "subject": "гостиная",
+                "fact": "В центре гостиной стоял огромный прозрачный сосуд, в котором произрастал гигантский светящийся гриб.",
+                "time_scope": "current",
+            },
+            {
+                "category": "place",
+                "subject": "след",
+                "fact": "Место, где Макс обнаружил следы, было местом, где он смог определить направление.",
+            },
+            {
+                "category": "event",
+                "subject": "обед в «Обжоре Бунбу»",
+                "fact": "Лонли-Локли и Макс отправились обедать в «Обжору Бунбу», где их ждал сэр Джуффин.",
+                "time_scope": "current",
+            },
+            {
+                "category": "event",
+                "subject": "утренний «подвиг» Макса",
+                "fact": "Макс рассказал Шурфу о своем утреннем «подвиге», который вызвал озабоченность Лонли-Локли.",
+                "time_scope": "current",
+            },
+            {
+                "category": "event",
+                "subject": "Сэр Шурф",
+                "fact": "Сэр Шурф унес Мелифаро под мышкой, как свернутый в рулон ковер.",
+                "time_scope": "past",
+            },
+            {
+                "category": "event",
+                "subject": "Джуффин Халли",
+                "fact": "Джуффин Халли назвал Макса лихим ветром.",
+                "time_scope": "past",
+            },
+            {
+                "category": "custom",
+                "subject": "Сэр Джуффин Халли",
+                "fact": "Сэр Джуффин Халли хлопнул Макса между лопаток, что в Соединённом Королевстве допустимо только между ближайшими друзьями.",
+                "time_scope": "past",
+            },
+            {
+                "category": "custom",
+                "subject": "Сон",
+                "fact": "Сон унесет незаконнорожденные гримасы иного мира, и все забудется.",
+                "time_scope": "past",
+            },
+            {
+                "category": "event",
+                "subject": "Джуффин Халли",
+                "fact": "Джуффин Халли приказывает Максу и Шурфу отправиться в «Обжору» на праздник воскрешения Мелифаро.",
+                "time_scope": "past",
+            },
+            {
+                "category": "character",
+                "subject": "Сэр Макс",
+                "fact": "Сэр Макс заявляет, что те, кто могли бы рассказать о зеркальцах, умолкли навеки.",
+                "time_scope": "past",
+            },
+        ]
+
+        validated = ed.validate_knowledge(items)
+
+        self.assertEqual(validated, [])
+
+    def test_process_chunks_parallel_survives_chunk_exception(self):
+        config = ed.Config()
+
+        with mock.patch.object(ed, "extract_knowledge", side_effect=RuntimeError("boom")):
+            dialogues, knowledge = ed.process_chunks_parallel(
+                client=object(),
+                config=config,
+                chunks=["Первый чанк"],
+                do_voice=False,
+                do_knowledge=True,
+                workers=1,
+                return_results=True,
+            )
+
+        self.assertEqual(dialogues, [])
+        self.assertEqual(knowledge, [])
+
     def test_process_book_llm_voice_and_knowledge_are_saved(self):
         book_name = "test_max_book.fb2"
         text = (
@@ -214,7 +966,10 @@ class LLMExtractionPipelineSmokeTest(unittest.TestCase):
             config = ed.Config(
                 output_dir=tmpdir,
                 chunk_size=5000,
+                knowledge_extraction_tracks=("world",),
             )
+            config.knowledge_llm_validation_enabled = False
+            config.knowledge_dual_extraction_enabled = False
             config.extraction_passes = 2
             config.extraction_neighbor_chunks = 1
             config.extraction_context_budget = 1200
@@ -239,22 +994,18 @@ class LLMExtractionPipelineSmokeTest(unittest.TestCase):
                         ], ensure_ascii=False)
                     return "[]"
 
-                if "извлеки ФАКТЫ о мире Ехо, персонажах и событиях" in user:
+                if "автономные факты для базы знаний мира Ехо" in user:
                     prompt_counters["knowledge"] += 1
                     if prompt_counters["knowledge"] == 1:
-                        return json.dumps([
-                            {
-                                "category": "event",
-                                "subject": "Макс",
-                                "fact": "Макс соглашается ехать дальше вместе с Джуффином.",
-                            },
-                            {
-                                "category": "custom",
-                                "subject": "Ехо",
-                                "fact": "В Ехо снова начали колдовать повара.",
-                            },
-                        ], ensure_ascii=False)
-                    return "[]"
+                        return (
+                            "category=event | subject=Макс | "
+                            "fact=Макс соглашается ехать дальше вместе с Джуффином. | "
+                            "time_scope=current\n"
+                            "category=custom | subject=Ехо | "
+                            "fact=В Ехо снова начали колдовать повара. | "
+                            "time_scope=current"
+                        )
+                    return ""
 
                 self.fail(f"Unexpected LLM prompt: {user[:200]}")
 
@@ -275,7 +1026,7 @@ class LLMExtractionPipelineSmokeTest(unittest.TestCase):
             self.assertEqual(prompt_counters["dialogues"], 2)
             self.assertEqual(prompt_counters["knowledge"], 2)
             self.assertEqual(len(result["voice_pairs"]), 1)
-            self.assertEqual(len(result["knowledge"]), 2)
+            self.assertEqual(len(result["knowledge"]), 1)
             self.assertEqual(result["synth_pairs"], [])
 
             output_paths = ed.get_book_output_paths(tmpdir, book_name)
@@ -300,14 +1051,11 @@ class LLMExtractionPipelineSmokeTest(unittest.TestCase):
                 for line in output_paths["knowledge_stream"].read_text(encoding="utf-8").splitlines()
                 if line.strip()
             ]
-            self.assertEqual(len(knowledge_stream_lines), 2)
+            self.assertEqual(len(knowledge_stream_lines), 1)
 
             knowledge_items = json.loads(output_paths["knowledge"].read_text(encoding="utf-8"))
-            self.assertEqual(len(knowledge_items), 2)
-            self.assertEqual(
-                {item["category"] for item in knowledge_items},
-                {"event", "custom"},
-            )
+            self.assertEqual(len(knowledge_items), 1)
+            self.assertEqual({item["category"] for item in knowledge_items}, {"custom"})
             self.assertEqual({item["source_book"] for item in knowledge_items}, {book_name})
             self.assertEqual({item["chapter"] for item in knowledge_items}, {"Предисловие"})
             self.assertEqual({item["chunk_idx"] for item in knowledge_items}, {0})
@@ -321,13 +1069,12 @@ class LLMExtractionPipelineSmokeTest(unittest.TestCase):
             self.assertEqual(chunk_records[0]["chapter"], "Предисловие")
             self.assertIn("— Ты готов?", chunk_records[0]["chunk_text"])
             self.assertEqual(len(chunk_records[0]["dialogues"]), 1)
-            self.assertEqual(len(chunk_records[0]["knowledge"]), 2)
+            self.assertEqual(len(chunk_records[0]["knowledge"]), 1)
 
             voice_txt = output_paths["voice_txt"].read_text(encoding="utf-8")
             knowledge_txt = output_paths["knowledge_txt"].read_text(encoding="utf-8")
             self.assertIn("Ладно, поехали,", voice_txt)
             self.assertIn("Джуффин: Ты готов?", voice_txt)
-            self.assertIn("Макс соглашается ехать дальше", knowledge_txt)
             self.assertIn("В Ехо снова начали колдовать повара.", knowledge_txt)
 
 
@@ -372,6 +1119,47 @@ class LLMExtractionPipelineSmokeTest(unittest.TestCase):
 
         self.assertEqual(len(linked), 1)
         self.assertEqual(linked[0]["subject"], "Маба Калох")
+
+    def test_retrieval_linking_does_not_drop_non_duplicate_fact(self):
+        config = ed.Config()
+        config.knowledge_link_top_k = 4
+        knowledge_base = [
+            {
+                "category": "character",
+                "subject": "Маба Калох",
+                "fact": "Маба Калох — старый знакомый Джуффина.",
+                "time_scope": "timeless",
+            }
+        ]
+        new_items = [
+            {
+                "category": "character",
+                "subject": "сэр Маба",
+                "fact": "Маба Калох пришел к Максу в гости.",
+                "time_scope": "current",
+            }
+        ]
+
+        def fake_call_llm(client, config, system, user, **kwargs):
+            return json.dumps(
+                {
+                    "decision": "drop_duplicate",
+                    "candidate_id": 1,
+                },
+                ensure_ascii=False,
+            )
+
+        with mock.patch.object(ed, "call_llm", side_effect=fake_call_llm):
+            linked = ed.link_knowledge_items_with_retrieval(
+                client=object(),
+                config=config,
+                items=new_items,
+                knowledge_base=knowledge_base,
+                log_prefix="[test-link-drop]",
+            )
+
+        self.assertEqual(len(linked), 1)
+        self.assertEqual(linked[0]["fact"], "Маба Калох пришел к Максу в гости.")
 
     def test_timeline_resolution_stage_builds_graph_from_facts_and_chunks(self):
         config = ed.Config(output_dir="")
