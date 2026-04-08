@@ -27,6 +27,8 @@
 ## Структура проекта
 
 - `extract_dialogues.py` — основной конвейер.
+- `dataset_studio.py` — веб-студия для ревью и правки датасета.
+- `dataset_studio_assets/` — статические файлы интерфейса студии.
 - `extract_regex.py` — быстрый локальный extractor голоса без LLM.
 - `diagnose_llm.py` — вспомогательная диагностика модели.
 - `tests/` — unit- и smoke-тесты ключевых частей пайплайна.
@@ -82,6 +84,67 @@ python extract_dialogues.py --no-auto-serve
 ```bash
 python extract_dialogues.py --no-resume
 ```
+
+## Dataset Studio
+
+После того как в `output/` появились `knowledge_*.jsonl`, `voice_*.jsonl`, `chunks_*.jsonl` и другие артефакты, можно открыть веб-редактор:
+
+```bash
+python dataset_studio.py --output-dir ./output
+```
+
+По умолчанию студия поднимается на `http://127.0.0.1:8766`.
+
+Что умеет студия:
+- просматривать, оценивать, редактировать, создавать и удалять факты;
+- смотреть исходный текст чанка, из которого поднят факт или пример;
+- работать со вкладкой `Chunks`: искать по исходным кускам книги, смотреть связанные факты и примеры, создавать новый факт прямо из выбранного чанка;
+- редактировать `time_scope`, заметки ревью и оценку;
+- создавать и править связи между фактами;
+- создавать, редактировать и объединять темы;
+- редактировать `voice`- и `synth`-примеры;
+- генерировать новые `voice`/`synth`-примеры по выбранным фактам;
+- отправлять один или несколько фактов на повторный LLM-анализ;
+- просматривать старые `llm_traces`, открывать конкретный trace, редактировать prompt и повторно запускать его с новым trace;
+- делать полностью новый ручной LLM-запуск прямо из интерфейса;
+- смотреть вкладку `Pipeline`: текущий `metadata.json`, историю событий из `metadata_history.jsonl` и журнал `llm_jobs`;
+- смотреть вкладку `Timeline`, если pipeline уже построил `timeline_graph.json` и `timeline_resolution_raw.json`;
+- откатывать изменения и экспортировать финальный датасет.
+
+Для headless UI smoke-тестов внутри WSL есть отдельный скрипт, который поднимает изолированный Chromium for Testing и не трогает Windows-браузер:
+
+```bash
+tests/run_ui_headless_wsl.sh
+```
+
+Он сам:
+- создаёт локальный WSL-venv `.wsl-ui-venv`;
+- ставит `selenium`;
+- скачивает portable `Chrome for Testing` и `chromedriver` в Linux home;
+- докачивает нужные runtime-библиотеки без системной установки;
+- запускает `tests.test_dataset_studio_ui` в headless-режиме.
+
+Все пользовательские изменения пишутся отдельно и не затирают исходные pipeline-файлы:
+- `output/editor_workspace/facts_ops.jsonl`
+- `output/editor_workspace/samples_ops.jsonl`
+- `output/editor_workspace/themes_ops.jsonl`
+- `output/editor_workspace/relations_ops.jsonl`
+
+Финальный экспорт студии сохраняется в:
+
+```text
+output/editor_workspace/exports/<timestamp>/
+```
+
+Там появятся:
+- `knowledge_base_final.json`
+- `knowledge_base_final.txt`
+- `dataset_final.jsonl`
+- `dataset_final.txt`
+- `voice_final.jsonl`
+- `synth_final.jsonl`
+- `themes_final.json`
+- `relations_final.json`
 
 ## Основные параметры
 
@@ -145,4 +208,16 @@ python extract_dialogues.py --no-resume
 
 Для полного пересчёта используй `--no-resume`.
 
+## Тесты
 
+Быстрый прогон основных тестов:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Headless UI smoke-тесты в WSL:
+
+```bash
+tests/run_ui_headless_wsl.sh
+```

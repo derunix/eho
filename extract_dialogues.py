@@ -30,11 +30,12 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Optional
 
+_openai_import_error = None
 try:
     from openai import OpenAI
-except ImportError:
-    print("Установи openai: pip install openai")
-    exit(1)
+except ImportError as exc:
+    OpenAI = Any  # type: ignore[assignment]
+    _openai_import_error = exc
 
 
 _extract_regex = None
@@ -8729,6 +8730,9 @@ def main() -> int:
             ollama_process = ensure_ollama(config.model)
 
         # Инициализация клиента
+        if _openai_import_error is not None:
+            print("Установи openai: pip install openai")
+            return 1
         client = OpenAI(base_url=config.api_base, api_key=config.api_key)
 
         # Автодетект ollama → нативный API с think=false

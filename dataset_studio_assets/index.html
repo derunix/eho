@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dataset Studio</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Dataset Studio</h1>
+      <p class="muted">Редактор фактов, голоса, синтетики, тем и связей</p>
+    </div>
+    <div class="topbar-actions">
+      <button id="refreshBtn">Обновить</button>
+      <button id="undoBtn">Undo</button>
+      <button id="exportBtn" class="accent">Экспорт финального датасета</button>
+    </div>
+  </header>
+
+  <section class="summary-grid" id="summaryGrid"></section>
+
+  <nav class="tabs">
+    <button class="tab is-active" data-tab="facts">Факты</button>
+    <button class="tab" data-tab="chunks">Chunks</button>
+    <button class="tab" data-tab="voice">Голос</button>
+    <button class="tab" data-tab="synth">Синтетика</button>
+    <button class="tab" data-tab="themes">Темы и связи</button>
+    <button class="tab" data-tab="pipeline">Pipeline</button>
+    <button class="tab" data-tab="timeline">Timeline</button>
+    <button class="tab" data-tab="llm">LLM trace</button>
+  </nav>
+
+  <main class="tab-panels">
+    <section class="tab-panel is-active" data-panel="facts">
+      <div class="toolbar">
+        <input id="factSearch" type="search" placeholder="Поиск по subject, факту, книге">
+        <select id="factCategory"></select>
+        <select id="factBook"></select>
+        <select id="factReview"></select>
+        <button id="factFilterBtn">Применить</button>
+        <button id="newFactBtn">Новый факт</button>
+        <button id="reanalyzeSelectedBtn">Переанализировать</button>
+        <button id="reanalyzeBundleBtn">Переанализировать связкой</button>
+      </div>
+      <div class="toolbar secondary">
+        <textarea id="generateInstruction" rows="2" placeholder="Инструкция для генерации голоса/синтетики по выбранным фактам"></textarea>
+        <div class="stack">
+          <button id="generateVoiceBtn">Сгенерировать voice</button>
+          <button id="generateSynthBtn">Сгенерировать synth</button>
+        </div>
+      </div>
+      <div class="split-layout">
+        <aside class="list-panel">
+          <div class="list-head">
+            <strong>Факты</strong>
+            <span id="factsCount" class="muted"></span>
+          </div>
+          <div id="factsList" class="list"></div>
+        </aside>
+        <section class="detail-panel">
+          <div id="factDetailEmpty" class="empty-state">Выбери факт или создай новый.</div>
+          <form id="factForm" class="detail-form hidden">
+            <div class="form-grid">
+              <label>ID<input name="id" readonly></label>
+              <label>Категория
+                <select name="category">
+                  <option value="character">character</option>
+                  <option value="place">place</option>
+                  <option value="magic">magic</option>
+                  <option value="history">history</option>
+                  <option value="creature">creature</option>
+                  <option value="custom">custom</option>
+                  <option value="event">event</option>
+                  <option value="unknown">unknown</option>
+                </select>
+              </label>
+              <label>Subject<input name="subject"></label>
+              <label>Time scope
+                <select name="time_scope">
+                  <option value="timeless">timeless</option>
+                  <option value="current">current</option>
+                  <option value="past">past</option>
+                  <option value="ended">ended</option>
+                  <option value="change">change</option>
+                  <option value="unclear">unclear</option>
+                </select>
+              </label>
+              <label>Книга<input name="source_book"></label>
+              <label>Глава<input name="chapter"></label>
+              <label>Chunk idx<input name="chunk_idx" type="number"></label>
+              <label>Review status
+                <select name="review_status">
+                  <option value="pending">pending</option>
+                  <option value="approved">approved</option>
+                  <option value="needs_work">needs_work</option>
+                  <option value="rejected">rejected</option>
+                </select>
+              </label>
+              <label>Review score<input name="review_score" type="number" step="0.1"></label>
+              <label class="span-2">Theme ids<input name="theme_ids" placeholder="theme:a, theme:b"></label>
+            </div>
+            <label>Факт<textarea name="fact" rows="4"></textarea></label>
+            <label>Заметка ревью<textarea name="review_note" rows="2"></textarea></label>
+            <label>Исходный текст чанка<textarea name="source_excerpt" rows="8"></textarea></label>
+            <div class="form-actions">
+              <button type="button" id="saveFactBtn" class="accent">Сохранить</button>
+              <button type="button" id="deleteFactBtn" class="danger">Удалить</button>
+            </div>
+          </form>
+
+          <section class="detail-subsection">
+            <div class="subsection-head">
+              <strong>Связи факта</strong>
+            </div>
+            <div id="factRelations" class="list compact"></div>
+            <form id="relationCreateForm" class="inline-form">
+              <input name="target_fact_id" placeholder="ID связанного факта">
+              <input name="relation_type" placeholder="Тип связи" value="related_to">
+              <input name="note" placeholder="Комментарий">
+              <button type="submit">Создать связь</button>
+            </form>
+          </section>
+
+          <section class="detail-subsection">
+            <div class="subsection-head">
+              <strong>Связанные примеры</strong>
+            </div>
+            <div id="factLinkedSamples" class="list compact"></div>
+          </section>
+        </section>
+      </div>
+    </section>
+
+    <section class="tab-panel" data-panel="chunks">
+      <div class="toolbar">
+        <input id="chunkSearch" type="search" placeholder="Поиск по книге, главе или тексту чанка">
+        <select id="chunkBook"></select>
+        <select id="chunkHasDialogues">
+          <option value="">Диалоги: все</option>
+          <option value="yes">Есть диалоги</option>
+          <option value="no">Нет диалогов</option>
+        </select>
+        <select id="chunkHasKnowledge">
+          <option value="">Факты: все</option>
+          <option value="yes">Есть факты</option>
+          <option value="no">Нет фактов</option>
+        </select>
+        <button id="chunkFilterBtn">Применить</button>
+        <button id="chunkCreateFactBtn">Новый факт из чанка</button>
+      </div>
+      <div class="split-layout">
+        <aside class="list-panel">
+          <div class="list-head">
+            <strong>Chunks</strong>
+            <span id="chunkCount" class="muted"></span>
+          </div>
+          <div id="chunksList" class="list"></div>
+        </aside>
+        <section class="detail-panel">
+          <div id="chunkDetailEmpty" class="empty-state">Выбери чанк, чтобы увидеть исходный текст и связанные данные.</div>
+          <div id="chunkDetail" class="detail-form hidden">
+            <div class="form-grid">
+              <label>ID<input id="chunkDetailId" readonly></label>
+              <label>Книга<input id="chunkDetailBook" readonly></label>
+              <label>Глава<input id="chunkDetailChapter" readonly></label>
+              <label>Chunk idx<input id="chunkDetailIdx" readonly></label>
+              <label>Диалогов<input id="chunkDetailDialogues" readonly></label>
+              <label>Фактов<input id="chunkDetailKnowledge" readonly></label>
+            </div>
+            <label>Текст чанка<textarea id="chunkDetailText" rows="14" readonly></textarea></label>
+            <section class="detail-subsection">
+              <div class="subsection-head">
+                <strong>Связанные факты</strong>
+              </div>
+              <div id="chunkLinkedFacts" class="list compact"></div>
+            </section>
+            <section class="detail-subsection">
+              <div class="subsection-head">
+                <strong>Связанные примеры</strong>
+              </div>
+              <div id="chunkLinkedSamples" class="list compact"></div>
+            </section>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="tab-panel" data-panel="voice">
+      <div class="toolbar">
+        <input id="voiceSearch" type="search" placeholder="Поиск по voice-примерам">
+        <select id="voiceReview"></select>
+        <button id="voiceFilterBtn">Применить</button>
+        <button id="newVoiceBtn">Новый voice</button>
+      </div>
+      <div class="split-layout">
+        <aside class="list-panel">
+          <div class="list-head">
+            <strong>Voice</strong>
+            <span id="voiceCount" class="muted"></span>
+          </div>
+          <div id="voiceList" class="list"></div>
+        </aside>
+        <section class="detail-panel">
+          <div id="voiceDetailEmpty" class="empty-state">Выбери voice-пример или создай новый.</div>
+          <form id="voiceForm" class="detail-form hidden">
+            <div class="form-grid">
+              <label>ID<input name="id" readonly></label>
+              <label>Книга<input name="source_book"></label>
+              <label>Глава<input name="chapter"></label>
+              <label>Chunk idx<input name="chunk_idx" type="number"></label>
+              <label>Review status
+                <select name="review_status">
+                  <option value="pending">pending</option>
+                  <option value="approved">approved</option>
+                  <option value="needs_work">needs_work</option>
+                  <option value="rejected">rejected</option>
+                </select>
+              </label>
+              <label>Review score<input name="review_score" type="number" step="0.1"></label>
+              <label class="span-2">Linked fact ids<input name="linked_fact_ids" placeholder="fact:a, fact:b"></label>
+              <label class="span-2">Theme ids<input name="theme_ids" placeholder="theme:a, theme:b"></label>
+            </div>
+            <label>System<textarea name="system" rows="4"></textarea></label>
+            <label>User<textarea name="user" rows="3"></textarea></label>
+            <label>Assistant<textarea name="assistant" rows="6"></textarea></label>
+            <label>Заметка ревью<textarea name="review_note" rows="2"></textarea></label>
+            <label>Исходный текст чанка<textarea name="source_excerpt" rows="8"></textarea></label>
+            <div class="form-actions">
+              <button type="button" id="saveVoiceBtn" class="accent">Сохранить</button>
+              <button type="button" id="deleteVoiceBtn" class="danger">Удалить</button>
+            </div>
+          </form>
+        </section>
+      </div>
+    </section>
+
+    <section class="tab-panel" data-panel="synth">
+      <div class="toolbar">
+        <input id="synthSearch" type="search" placeholder="Поиск по synth-примерам">
+        <select id="synthReview"></select>
+        <button id="synthFilterBtn">Применить</button>
+        <button id="newSynthBtn">Новый synth</button>
+      </div>
+      <div class="split-layout">
+        <aside class="list-panel">
+          <div class="list-head">
+            <strong>Synth</strong>
+            <span id="synthCount" class="muted"></span>
+          </div>
+          <div id="synthList" class="list"></div>
+        </aside>
+        <section class="detail-panel">
+          <div id="synthDetailEmpty" class="empty-state">Выбери synth-пример или создай новый.</div>
+          <form id="synthForm" class="detail-form hidden">
+            <div class="form-grid">
+              <label>ID<input name="id" readonly></label>
+              <label>Книга<input name="source_book"></label>
+              <label>Глава<input name="chapter"></label>
+              <label>Chunk idx<input name="chunk_idx" type="number"></label>
+              <label>Review status
+                <select name="review_status">
+                  <option value="pending">pending</option>
+                  <option value="approved">approved</option>
+                  <option value="needs_work">needs_work</option>
+                  <option value="rejected">rejected</option>
+                </select>
+              </label>
+              <label>Review score<input name="review_score" type="number" step="0.1"></label>
+              <label class="span-2">Linked fact ids<input name="linked_fact_ids" placeholder="fact:a, fact:b"></label>
+              <label class="span-2">Theme ids<input name="theme_ids" placeholder="theme:a, theme:b"></label>
+            </div>
+            <label>System<textarea name="system" rows="4"></textarea></label>
+            <label>User<textarea name="user" rows="3"></textarea></label>
+            <label>Assistant<textarea name="assistant" rows="6"></textarea></label>
+            <label>Заметка ревью<textarea name="review_note" rows="2"></textarea></label>
+            <label>Исходный текст чанка<textarea name="source_excerpt" rows="8"></textarea></label>
+            <div class="form-actions">
+              <button type="button" id="saveSynthBtn" class="accent">Сохранить</button>
+              <button type="button" id="deleteSynthBtn" class="danger">Удалить</button>
+            </div>
+          </form>
+        </section>
+      </div>
+    </section>
+
+    <section class="tab-panel" data-panel="themes">
+      <div class="split-layout">
+        <aside class="list-panel">
+          <div class="list-head">
+            <strong>Темы</strong>
+          </div>
+          <div id="themesList" class="list"></div>
+          <button id="newThemeBtn">Новая тема</button>
+        </aside>
+        <section class="detail-panel">
+          <div id="themeDetailEmpty" class="empty-state">Выбери тему или создай новую.</div>
+          <form id="themeForm" class="detail-form hidden">
+            <div class="form-grid">
+              <label>ID<input name="id" readonly></label>
+              <label>Название<input name="name"></label>
+              <label>Цвет<input name="color" type="color"></label>
+            </div>
+            <label>Описание<textarea name="description" rows="4"></textarea></label>
+            <div class="form-actions">
+              <button type="button" id="saveThemeBtn" class="accent">Сохранить</button>
+              <button type="button" id="deleteThemeBtn" class="danger">Удалить</button>
+            </div>
+          </form>
+          <section class="detail-subsection">
+            <div class="subsection-head">
+              <strong>Объединение тем</strong>
+            </div>
+            <form id="themeMergeForm" class="inline-form">
+              <select name="source_theme_id" id="mergeSourceTheme"></select>
+              <select name="target_theme_id" id="mergeTargetTheme"></select>
+              <button type="submit">Объединить</button>
+            </form>
+          </section>
+          <section class="detail-subsection">
+            <div class="subsection-head">
+              <strong>Все связи</strong>
+            </div>
+            <div id="relationsList" class="list compact"></div>
+          </section>
+        </section>
+      </div>
+    </section>
+
+    <section class="tab-panel" data-panel="pipeline">
+      <div class="toolbar">
+        <input id="pipelineEventSearch" type="search" placeholder="Поиск по событиям пайплайна">
+        <button id="pipelineRefreshBtn">Обновить pipeline</button>
+      </div>
+      <div class="split-layout pipeline-layout">
+        <aside class="list-panel">
+          <div class="list-head">
+            <strong>События запуска</strong>
+            <span id="pipelineEventCount" class="muted"></span>
+          </div>
+          <div id="pipelineEventsList" class="list"></div>
+        </aside>
+        <section class="detail-panel">
+          <section class="detail-subsection">
+            <div class="subsection-head">
+              <strong>Snapshot metadata.json</strong>
+            </div>
+            <textarea id="pipelineMetadata" rows="18" readonly></textarea>
+          </section>
+          <section class="detail-subsection">
+            <div class="subsection-head">
+              <strong>LLM jobs</strong>
+              <span id="pipelineJobsCount" class="muted"></span>
+            </div>
+            <div id="pipelineJobsList" class="list compact"></div>
+          </section>
+          <section class="detail-subsection">
+            <div class="subsection-head">
+              <strong>Детали выбранного события / job</strong>
+            </div>
+            <textarea id="pipelineDetail" rows="14" readonly></textarea>
+          </section>
+        </section>
+      </div>
+    </section>
+
+    <section class="tab-panel" data-panel="timeline">
+      <div class="toolbar">
+        <input id="timelineSearch" type="search" placeholder="Поиск по узлам, ребрам и группам">
+        <select id="timelineBook"></select>
+        <select id="timelineNodeType"></select>
+        <button id="timelineFilterBtn">Применить</button>
+      </div>
+      <section class="summary-grid compact" id="timelineSummaryGrid"></section>
+      <div class="tri-layout">
+        <section class="list-panel">
+          <div class="list-head">
+            <strong>Groups</strong>
+            <span id="timelineGroupsCount" class="muted"></span>
+          </div>
+          <div id="timelineGroupsList" class="list compact"></div>
+        </section>
+        <section class="list-panel">
+          <div class="list-head">
+            <strong>Nodes</strong>
+            <span id="timelineNodesCount" class="muted"></span>
+          </div>
+          <div id="timelineNodesList" class="list compact"></div>
+        </section>
+        <section class="list-panel">
+          <div class="list-head">
+            <strong>Edges</strong>
+            <span id="timelineEdgesCount" class="muted"></span>
+          </div>
+          <div id="timelineEdgesList" class="list compact"></div>
+        </section>
+      </div>
+      <section class="detail-subsection">
+        <div class="subsection-head">
+          <strong>Детали timeline</strong>
+        </div>
+        <textarea id="timelineDetail" rows="16" readonly></textarea>
+      </section>
+    </section>
+
+    <section class="tab-panel" data-panel="llm">
+      <div class="toolbar">
+        <select id="llmRunSelect"></select>
+        <input id="llmSearch" type="search" placeholder="Поиск по модели, prompt, ответу">
+        <button id="llmFilterBtn">Применить</button>
+        <button id="llmNewRunBtn">Новый запуск</button>
+      </div>
+      <div class="split-layout llm-layout">
+        <aside class="list-panel">
+          <div class="list-head">
+            <strong>Trace</strong>
+            <span id="llmTraceCount" class="muted"></span>
+          </div>
+          <div id="llmRunsInfo" class="muted runs-info"></div>
+          <div id="llmTraceList" class="list"></div>
+        </aside>
+        <section class="detail-panel">
+          <div id="llmDetailEmpty" class="empty-state">Выбери trace или создай новый запуск.</div>
+          <form id="llmForm" class="detail-form hidden">
+            <div class="form-grid">
+              <label>Trace ref<input name="trace_ref" readonly></label>
+              <label>Model<input name="model_override"></label>
+              <label>Max tokens<input name="max_tokens" type="number"></label>
+              <label>Temperature<input name="temperature" type="number" step="0.1"></label>
+              <label class="span-2">Log prefix<input name="log_prefix"></label>
+              <label class="span-2">Response format<textarea name="response_format" rows="2" placeholder='Например {"type":"json_object"}'></textarea></label>
+            </div>
+            <label>System<textarea name="system" rows="6"></textarea></label>
+            <label>User<textarea name="user" rows="10"></textarea></label>
+            <div class="form-actions">
+              <button type="button" id="llmRunBtn" class="accent">Запустить</button>
+              <button type="button" id="llmRerunBtn">Повторить trace</button>
+            </div>
+          </form>
+          <section class="detail-subsection">
+            <div class="subsection-head">
+              <strong>Попытки и ответы</strong>
+            </div>
+            <div id="llmAttempts" class="list compact"></div>
+          </section>
+          <section class="detail-subsection">
+            <div class="subsection-head">
+              <strong>Последний ответ</strong>
+            </div>
+            <textarea id="llmLastResponse" rows="12" readonly></textarea>
+          </section>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/assets/app.js"></script>
+</body>
+</html>
