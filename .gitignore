@@ -20,10 +20,12 @@ output_*/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.cache/
 .coverage
 htmlcov/
 
 # IDE / OS files
+.claude/
 .idea/
 .vscode/
 .DS_Store
@@ -32,6 +34,8 @@ Thumbs.db
 # Local env / logs
 .env
 *.log
+*.tmp
+*.temp
 
 # Packaging artifacts
 build/

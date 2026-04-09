@@ -194,6 +194,24 @@ def make_studio_paths(output_dir: Path, workspace_dir: Optional[Path] = None) ->
     )
 
 
+def _file_fingerprint(path: Path) -> tuple[float, int]:
+    try:
+        st = path.stat()
+        return (st.st_mtime, st.st_size)
+    except OSError:
+        return (0.0, 0)
+
+
+def _dir_fingerprint(directory: Path, pattern: str) -> list[tuple[str, float, int]]:
+    if not directory.exists():
+        return []
+    items = []
+    for path in sorted(directory.glob(pattern)):
+        mtime, size = _file_fingerprint(path)
+        items.append((str(path), mtime, size))
+    return items
+
+
 class DatasetStudioStore:
     def __init__(self, output_dir: Path, workspace_dir: Optional[Path] = None):
         self.paths = make_studio_paths(output_dir, workspace_dir)
@@ -201,10 +219,33 @@ class DatasetStudioStore:
         self._config_cache: Optional[ed.Config] = None
         self._llm_trace_stats_cache: Optional[dict[str, Any]] = None
         self._state: dict[str, Any] = {}
+        self._state_fingerprint: Optional[list] = None
+        self._chunk_cache: Optional[list[dict]] = None
+        self._chunk_cache_fingerprint: Optional[list] = None
+
+    def _compute_state_fingerprint(self) -> list:
+        return [
+            _dir_fingerprint(self.paths.output_dir, "chunks_*.jsonl"),
+            _dir_fingerprint(self.paths.output_dir, "knowledge_*.jsonl"),
+            _dir_fingerprint(self.paths.output_dir, "voice_*.jsonl"),
+            _dir_fingerprint(self.paths.output_dir, "synth_*.jsonl"),
+            _dir_fingerprint(self.paths.output_dir, "synth_progress_*.jsonl"),
+            _file_fingerprint(self.paths.facts_ops),
+            _file_fingerprint(self.paths.samples_ops),
+            _file_fingerprint(self.paths.themes_ops),
+            _file_fingerprint(self.paths.relations_ops),
+        ]
+
+    def _compute_chunk_fingerprint(self) -> list:
+        return _dir_fingerprint(self.paths.output_dir, "chunks_*.jsonl")
 
     def refresh(self):
         with self._lock:
+            new_fp = self._compute_state_fingerprint()
+            if self._state and self._state_fingerprint == new_fp:
+                return
             self._state = self._load_state()
+            self._state_fingerprint = new_fp
             self._config_cache = None
 
     def _load_state(self) -> dict[str, Any]:
@@ -605,6 +646,15 @@ class DatasetStudioStore:
             }
 
     def _iter_chunk_records(self) -> list[dict]:
+        chunk_fp = self._compute_chunk_fingerprint()
+        if self._chunk_cache is not None and self._chunk_cache_fingerprint == chunk_fp:
+            return self._chunk_cache
+        items = self._load_chunk_records()
+        self._chunk_cache = items
+        self._chunk_cache_fingerprint = chunk_fp
+        return items
+
+    def _load_chunk_records(self) -> list[dict]:
         items: list[dict] = []
         for path in sorted(self.paths.output_dir.glob("chunks_*.jsonl")):
             book_stem = book_stem_from_output_name(path.name, "chunks_")
@@ -1619,33 +1669,22 @@ class DatasetStudioStore:
         run_counts: dict[str, dict[str, Any]] = {}
         for record in self._iter_llm_trace_records():
             path = record["path"]
-            created_at = datetime.fromtimestamp(record["mtime"], tz=timezone.utc).astimezone().isoformat(timespec="seconds")
-            summary = {
-                "id": f"{self._llm_run_id_for_trace(path)}/{path.stem}",
-                "trace_id": path.stem,
-                "run_id": self._llm_run_id_for_trace(path),
-                "path": str(path),
-                "created_at": created_at,
-                "updated_at": created_at,
-                "provider": "",
-                "model": "",
-                "log_prefix": "",
-                "max_tokens": None,
-                "temperature": None,
-                "response_format": None,
-                "system_preview": "",
-                "user_preview": "",
-                "attempt_count": 0,
-                "last_status": "",
-                "last_content_preview": "",
-            }
-            if run_id and summary["run_id"] != run_id:
+            current_run_id = self._llm_run_id_for_trace(path)
+            if run_id and current_run_id != run_id:
                 continue
+            trace = read_json(path, {})
+            if not isinstance(trace, dict):
+                trace = {}
+            summary = self._llm_trace_summary(trace, path)
             if search and not self._filter_search(
                 [
                     summary.get("trace_id", ""),
                     summary.get("run_id", ""),
-                    summary.get("path", ""),
+                    summary.get("model", ""),
+                    summary.get("provider", ""),
+                    summary.get("log_prefix", ""),
+                    summary.get("user_preview", ""),
+                    summary.get("last_content_preview", ""),
                 ],
                 search,
             ):
@@ -1819,6 +1858,40 @@ class DatasetStudioStore:
             raise RuntimeError("openai package is required for LLM actions. Install with: pip install openai")
         return ed.OpenAI(base_url=config.api_base, api_key=config.api_key)
 
+    def _call_llm_auto(
+        self,
+        config: ed.Config,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int = 800,
+        temperature: float = 0.2,
+        log_prefix: str = "",
+        model_override: Optional[str] = None,
+        response_format: Optional[Any] = None,
+    ) -> Optional[str]:
+        trace_id = ed.next_llm_trace_id(log_prefix)
+        if ":11434" in config.api_base:
+            return ed.call_llm_ollama_native(
+                config, system, user,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                log_prefix=log_prefix,
+                temperature=temperature,
+                trace_id=trace_id,
+                model_override=model_override,
+            )
+        client = self._llm_client()
+        return ed.call_llm_openai(
+            client, config, system, user,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            log_prefix=log_prefix,
+            temperature=temperature,
+            trace_id=trace_id,
+            model_override=model_override,
+        )
+
     def _record_llm_job(self, job_type: str, request_payload: dict, response_payload: dict):
         job = {
             "job_id": f"{job_type}:{uuid.uuid4().hex}",
@@ -1907,13 +1980,8 @@ class DatasetStudioStore:
         )
 
         config = self._editor_config()
-        client = self._llm_client()
-        ed._use_ollama_native = ":11434" in config.api_base
-        response = ed.call_llm(
-            client,
-            config,
-            system,
-            user,
+        response = self._call_llm_auto(
+            config, system, user,
             max_tokens=1200,
             temperature=0.0,
             log_prefix="[studio][reanalyze]",
@@ -1967,13 +2035,8 @@ class DatasetStudioStore:
         )
 
         config = self._editor_config()
-        client = self._llm_client()
-        ed._use_ollama_native = ":11434" in config.api_base
-        response = ed.call_llm(
-            client,
-            config,
-            system,
-            user,
+        response = self._call_llm_auto(
+            config, system, user,
             max_tokens=900,
             temperature=0.7,
             log_prefix="[studio][generate]",
@@ -2300,6 +2363,19 @@ class DatasetStudioHandler(BaseHTTPRequestHandler):
         try:
             if path == "/api/facts":
                 self._send_json(self.store.create_fact(body), status=201)
+                return
+            if path == "/api/facts/batch":
+                fact_ids = [safe_text(item) for item in body.get("fact_ids", []) if safe_text(item)]
+                patch = body.get("patch", {})
+                if not isinstance(patch, dict) or not fact_ids:
+                    raise ValueError("fact_ids and patch are required")
+                results = []
+                for fid in fact_ids:
+                    try:
+                        results.append(self.store.update_fact(fid, patch))
+                    except KeyError:
+                        pass
+                self._send_json({"updated": len(results)})
                 return
             if path == "/api/facts/reanalyze":
                 fact_ids = [safe_text(item) for item in body.get("fact_ids", []) if safe_text(item)]

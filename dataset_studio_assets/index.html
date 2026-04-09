@@ -51,6 +51,20 @@
           <button id="generateSynthBtn">Сгенерировать synth</button>
         </div>
       </div>
+      <div class="toolbar secondary batch-toolbar">
+        <div class="batch-label muted">Batch review выбранных:</div>
+        <div class="batch-actions">
+          <button id="batchApproveBtn" class="pill-btn approved">Approved</button>
+          <button id="batchNeedsWorkBtn" class="pill-btn needs_work">Needs work</button>
+          <button id="batchRejectBtn" class="pill-btn rejected">Rejected</button>
+        </div>
+      </div>
+      <section id="reanalyzePanel" class="detail-subsection hidden">
+        <div class="subsection-head">
+          <strong>Предложения переанализа</strong>
+        </div>
+        <div id="reanalyzeSuggestionsList" class="list compact"></div>
+      </section>
       <div class="split-layout">
         <aside class="list-panel">
           <div class="list-head">

@@ -375,6 +375,15 @@ class DatasetStudioStoreTests(unittest.TestCase):
         self.assertTrue((export_dir / "themes_final.json").exists())
         self.assertTrue((export_dir / "relations_final.json").exists())
 
+    def test_llm_trace_listing_populates_model_and_preview(self):
+        traces = self.store.list_llm_traces(run_id="run_20260408_101010")
+        self.assertEqual(traces["total"], 1)
+        item = traces["items"][0]
+        self.assertEqual(item["model"], "gemma4:latest")
+        self.assertEqual(item["provider"], "ollama_native")
+        self.assertIn("Дом у Моста", item["user_preview"])
+        self.assertEqual(item["last_status"], "ok")
+
     def test_llm_trace_listing_and_detail(self):
         runs = self.store.list_llm_runs()
         self.assertGreaterEqual(len(runs), 2)
@@ -483,6 +492,30 @@ class DatasetStudioStoreTests(unittest.TestCase):
         self.assertEqual(groups["total"], 1)
 
 
+    def test_smart_refresh_skips_reload_when_files_unchanged(self):
+        self.store.refresh()
+        state_before = self.store._state  # noqa: SLF001
+        self.store.refresh()
+        state_after = self.store._state  # noqa: SLF001
+        self.assertIs(state_before, state_after)
+
+    def test_batch_update_changes_review_status_for_multiple_facts(self):
+        extra = self.store.create_fact(
+            {
+                "category": "character",
+                "subject": "Макс",
+                "fact": "Макс пьёт камру.",
+                "time_scope": "timeless",
+            }
+        )
+        fact_ids = list(self.store._state["facts"])  # noqa: SLF001
+        self.assertGreaterEqual(len(fact_ids), 2)
+        for fid in fact_ids:
+            self.store.update_fact(fid, {"review_status": "approved"})
+        for fid in fact_ids:
+            self.assertEqual(self.store.get_fact(fid)["item"]["review_status"], "approved")
+
+
 class DatasetStudioApiTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
@@ -546,6 +579,17 @@ class DatasetStudioApiTests(unittest.TestCase):
         with mock.patch.object(self.store, "run_llm_prompt", return_value={"trace_ref": "studio_x/test", "content": "ok", "trace_path": "/tmp/x.json", "trace": {}}):
             result = self.request("POST", "/api/llm/run", {"system": "s", "user": "u"})
         self.assertEqual(result["trace_ref"], "studio_x/test")
+
+    def test_http_batch_update_facts(self):
+        facts = self.request("GET", "/api/facts?limit=10")
+        fact_id = facts["items"][0]["id"]
+        result = self.request("POST", "/api/facts/batch", {
+            "fact_ids": [fact_id],
+            "patch": {"review_status": "rejected"},
+        })
+        self.assertEqual(result["updated"], 1)
+        updated = self.request("GET", f"/api/facts/{fact_id}")
+        self.assertEqual(updated["item"]["review_status"], "rejected")
 
     def test_http_chunk_pipeline_and_timeline_routes(self):
         chunks = self.request("GET", "/api/chunks?limit=10")

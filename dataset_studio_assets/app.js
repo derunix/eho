@@ -1,16 +1,30 @@
+const PAGE_SIZE = 100;
+
 const state = {
   summary: null,
   facts: [],
+  factsTotal: 0,
+  factsOffset: 0,
   chunks: [],
+  chunksTotal: 0,
+  chunksOffset: 0,
   voice: [],
+  voiceTotal: 0,
+  voiceOffset: 0,
   synth: [],
+  synthTotal: 0,
+  synthOffset: 0,
   themes: [],
   relations: [],
   pipelineSummary: null,
   pipelineEvents: [],
+  pipelineEventsTotal: 0,
+  pipelineEventsOffset: 0,
   llmJobs: [],
   llmRuns: [],
   llmTraces: [],
+  llmTracesTotal: 0,
+  llmTracesOffset: 0,
   timelineOverview: null,
   timelineNodes: [],
   timelineEdges: [],
@@ -25,6 +39,7 @@ const state = {
   selectedPipelineDetail: null,
   selectedTimelineDetail: null,
   selectedFactIds: new Set(),
+  reanalyzeSuggestions: [],
 };
 
 const byId = (id) => document.getElementById(id);
@@ -117,6 +132,50 @@ function fillSelect(select, options, includeAll = true, current = "") {
   select.value = current;
 }
 
+async function withLoading(button, fn) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = original + "...";
+  try {
+    return await fn();
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+function renderLoadMore(containerId, total, loaded, loadMoreFn) {
+  const existing = document.querySelector(`#${containerId} .load-more-btn`);
+  if (existing) existing.remove();
+  if (loaded < total) {
+    const container = byId(containerId);
+    const btn = document.createElement("button");
+    btn.className = "load-more-btn";
+    btn.textContent = `Загрузить ещё (${loaded}/${total})`;
+    btn.addEventListener("click", () => withLoading(btn, loadMoreFn).catch((err) => toast(err.message, true)));
+    container.appendChild(btn);
+  }
+}
+
+function validateRequired(fields) {
+  for (const [label, value] of fields) {
+    if (!String(value || "").trim()) {
+      toast(`Поле «${label}» обязательно`, true);
+      return false;
+    }
+  }
+  return true;
+}
+
+function tryParseJson(text) {
+  if (!String(text || "").trim()) return { ok: true, value: null };
+  try {
+    return { ok: true, value: JSON.parse(text) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
 function renderSummary() {
   if (!state.summary) return;
   const cards = [
@@ -148,16 +207,24 @@ async function loadSummary() {
   renderSummary();
 }
 
-async function loadFacts() {
+async function loadFacts(append = false) {
+  if (!append) state.factsOffset = 0;
   const params = new URLSearchParams({
     search: byId("factSearch").value,
     category: byId("factCategory").value,
     book: byId("factBook").value,
     review_status: byId("factReview").value,
-    limit: "500",
+    limit: String(PAGE_SIZE),
+    offset: String(state.factsOffset),
   });
   const payload = await api(`/api/facts?${params.toString()}`);
-  state.facts = payload.items || [];
+  if (append) {
+    state.facts = state.facts.concat(payload.items || []);
+  } else {
+    state.facts = payload.items || [];
+  }
+  state.factsTotal = payload.total || 0;
+  state.factsOffset = state.facts.length;
   renderFacts();
   if (state.selectedFactId) {
     await loadFactDetail(state.selectedFactId).catch(() => {});
@@ -165,7 +232,7 @@ async function loadFacts() {
 }
 
 function renderFacts() {
-  byId("factsCount").textContent = `${state.facts.length} записей`;
+  byId("factsCount").textContent = `${state.facts.length}/${state.factsTotal}`;
   byId("factsList").innerHTML = state.facts
     .map((item) => `
       <article class="list-item ${item.id === state.selectedFactId ? "is-selected" : ""}" data-fact-item="${escapeHtml(item.id)}">
@@ -197,6 +264,7 @@ function renderFacts() {
       else state.selectedFactIds.delete(id);
     })
   );
+  renderLoadMore("factsList", state.factsTotal, state.facts.length, () => loadFacts(true));
 }
 
 async function openFact(id) {
@@ -268,10 +336,13 @@ async function loadFactDetail(id) {
 
 async function saveFact() {
   const form = byId("factForm");
+  const subject = form.elements.namedItem("subject").value;
+  const fact = form.elements.namedItem("fact").value;
+  if (!validateRequired([["Subject", subject], ["Факт", fact]])) return;
   const payload = {
     category: form.elements.namedItem("category").value,
-    subject: form.elements.namedItem("subject").value,
-    fact: form.elements.namedItem("fact").value,
+    subject,
+    fact,
     time_scope: form.elements.namedItem("time_scope").value,
     source_book: form.elements.namedItem("source_book").value,
     chapter: form.elements.namedItem("chapter").value,
@@ -328,8 +399,88 @@ async function reanalyzeFacts(bundle) {
     method: "POST",
     body: JSON.stringify({ fact_ids: factIds, bundle }),
   });
-  toast(`Получено предложений: ${(result.suggestions || []).length}`);
-  console.log("reanalyze", result);
+  state.reanalyzeSuggestions = result.suggestions || [];
+  renderReanalyzeSuggestions();
+  toast(`Получено предложений: ${state.reanalyzeSuggestions.length}`);
+}
+
+function renderReanalyzeSuggestions() {
+  const panel = byId("reanalyzePanel");
+  if (!state.reanalyzeSuggestions.length) {
+    panel.classList.add("hidden");
+    return;
+  }
+  panel.classList.remove("hidden");
+  byId("reanalyzeSuggestionsList").innerHTML = state.reanalyzeSuggestions
+    .map((item, idx) => `
+      <div class="list-item suggestion-item ${item.action === "drop" ? "suggestion-drop" : "suggestion-keep"}">
+        <div class="list-item-title">
+          <span class="pill ${item.action === "drop" ? "rejected" : "approved"}">${escapeHtml(item.action)}</span>
+          ${escapeHtml(item.fact_id || "")}
+        </div>
+        ${item.fact ? `
+          <div class="suggestion-fact">
+            <strong>${escapeHtml(item.fact.subject || "")}</strong>:
+            ${escapeHtml(item.fact.fact || "")}
+            <span class="muted">[${escapeHtml(item.fact.category || "")} / ${escapeHtml(item.fact.time_scope || "")}]</span>
+          </div>
+        ` : ""}
+        <div class="muted">${escapeHtml(item.reason || "")}</div>
+        <div class="form-actions">
+          <button type="button" class="accent suggestion-accept" data-idx="${idx}">Принять</button>
+          <button type="button" class="suggestion-dismiss" data-idx="${idx}">Отклонить</button>
+        </div>
+      </div>
+    `)
+    .join("");
+  qsa(".suggestion-accept", panel).forEach((btn) =>
+    btn.addEventListener("click", () =>
+      withLoading(btn, () => applySuggestion(Number(btn.dataset.idx))).catch((err) => toast(err.message, true))
+    )
+  );
+  qsa(".suggestion-dismiss", panel).forEach((btn) =>
+    btn.addEventListener("click", () => dismissSuggestion(Number(btn.dataset.idx)))
+  );
+}
+
+async function applySuggestion(idx) {
+  const suggestion = state.reanalyzeSuggestions[idx];
+  if (!suggestion) return;
+  if (suggestion.action === "drop") {
+    await api(`/api/facts/${encodeURIComponent(suggestion.fact_id)}`, { method: "DELETE" });
+    toast(`Факт ${suggestion.fact_id} удалён`);
+  } else if (suggestion.action === "keep" && suggestion.fact) {
+    await api(`/api/facts/${encodeURIComponent(suggestion.fact_id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(suggestion.fact),
+    });
+    toast(`Факт ${suggestion.fact_id} обновлён`);
+  }
+  state.reanalyzeSuggestions.splice(idx, 1);
+  renderReanalyzeSuggestions();
+  await loadSummary();
+  await loadFacts();
+}
+
+function dismissSuggestion(idx) {
+  state.reanalyzeSuggestions.splice(idx, 1);
+  renderReanalyzeSuggestions();
+}
+
+async function batchSetReviewStatus(status) {
+  const factIds = Array.from(state.selectedFactIds);
+  if (!factIds.length) {
+    toast("Сначала выбери факты", true);
+    return;
+  }
+  await api("/api/facts/batch", {
+    method: "POST",
+    body: JSON.stringify({ fact_ids: factIds, patch: { review_status: status } }),
+  });
+  state.selectedFactIds.clear();
+  toast(`${factIds.length} фактов → ${status}`);
+  await loadSummary();
+  await loadFacts();
 }
 
 async function createRelation(event) {
@@ -407,17 +558,27 @@ async function generateFromFacts(kind) {
   }
 }
 
-async function loadSamples(kind) {
+async function loadSamples(kind, append = false) {
   const searchId = kind === "voice" ? "voiceSearch" : "synthSearch";
   const reviewId = kind === "voice" ? "voiceReview" : "synthReview";
+  const totalKey = kind === "voice" ? "voiceTotal" : "synthTotal";
+  const offsetKey = kind === "voice" ? "voiceOffset" : "synthOffset";
+  if (!append) state[offsetKey] = 0;
   const params = new URLSearchParams({
     kind,
     search: byId(searchId).value,
     review_status: byId(reviewId).value,
-    limit: "500",
+    limit: String(PAGE_SIZE),
+    offset: String(state[offsetKey]),
   });
   const payload = await api(`/api/samples?${params.toString()}`);
-  state[kind] = payload.items || [];
+  if (append) {
+    state[kind] = state[kind].concat(payload.items || []);
+  } else {
+    state[kind] = payload.items || [];
+  }
+  state[totalKey] = payload.total || 0;
+  state[offsetKey] = state[kind].length;
   renderSamples(kind);
   const selectedId = kind === "voice" ? state.selectedVoiceId : state.selectedSynthId;
   if (selectedId) await loadSampleDetail(kind, selectedId).catch(() => {});
@@ -427,7 +588,8 @@ function renderSamples(kind) {
   const selectedId = kind === "voice" ? state.selectedVoiceId : state.selectedSynthId;
   const listId = kind === "voice" ? "voiceList" : "synthList";
   const countId = kind === "voice" ? "voiceCount" : "synthCount";
-  byId(countId).textContent = `${state[kind].length} записей`;
+  const totalKey = kind === "voice" ? "voiceTotal" : "synthTotal";
+  byId(countId).textContent = `${state[kind].length}/${state[totalKey]}`;
   byId(listId).innerHTML = state[kind]
     .map((item) => `
       <article class="list-item ${item.id === selectedId ? "is-selected" : ""}" data-sample-kind="${kind}" data-sample-id="${escapeHtml(item.id)}">
@@ -443,6 +605,7 @@ function renderSamples(kind) {
   qsa(`[data-sample-kind="${kind}"]`, byId(listId)).forEach((node) =>
     node.addEventListener("click", () => openSample(kind, node.dataset.sampleId))
   );
+  renderLoadMore(listId, state[totalKey], state[kind].length, () => loadSamples(kind, true));
 }
 
 async function openSample(kind, id) {
@@ -478,11 +641,14 @@ function newSample(kind) {
 
 async function saveSample(kind) {
   const form = byId(kind === "voice" ? "voiceForm" : "synthForm");
+  const userText = form.elements.namedItem("user").value;
+  const assistantText = form.elements.namedItem("assistant").value;
+  if (!validateRequired([["User", userText], ["Assistant", assistantText]])) return;
   const payload = {
     kind,
     system: form.elements.namedItem("system").value,
-    user: form.elements.namedItem("user").value,
-    assistant: form.elements.namedItem("assistant").value,
+    user: userText,
+    assistant: assistantText,
     source_book: form.elements.namedItem("source_book").value,
     chapter: form.elements.namedItem("chapter").value,
     source_excerpt: form.elements.namedItem("source_excerpt").value,
@@ -581,8 +747,10 @@ function openTheme(id) {
 
 async function saveTheme() {
   const form = byId("themeForm");
+  const name = form.elements.namedItem("name").value;
+  if (!validateRequired([["Название", name]])) return;
   const payload = {
-    name: form.elements.namedItem("name").value,
+    name,
     description: form.elements.namedItem("description").value,
     color: form.elements.namedItem("color").value,
   };
@@ -632,16 +800,24 @@ async function mergeThemes(event) {
   await loadThemesAndRelations();
 }
 
-async function loadChunks() {
+async function loadChunks(append = false) {
+  if (!append) state.chunksOffset = 0;
   const params = new URLSearchParams({
     search: byId("chunkSearch").value,
     book: byId("chunkBook").value,
     has_dialogues: byId("chunkHasDialogues").value,
     has_knowledge: byId("chunkHasKnowledge").value,
-    limit: "500",
+    limit: String(PAGE_SIZE),
+    offset: String(state.chunksOffset),
   });
   const payload = await api(`/api/chunks?${params.toString()}`);
-  state.chunks = payload.items || [];
+  if (append) {
+    state.chunks = state.chunks.concat(payload.items || []);
+  } else {
+    state.chunks = payload.items || [];
+  }
+  state.chunksTotal = payload.total || 0;
+  state.chunksOffset = state.chunks.length;
   renderChunks();
   if (state.selectedChunkId) {
     await loadChunkDetail(state.selectedChunkId).catch(() => {});
@@ -649,7 +825,7 @@ async function loadChunks() {
 }
 
 function renderChunks() {
-  byId("chunkCount").textContent = `${state.chunks.length} записей`;
+  byId("chunkCount").textContent = `${state.chunks.length}/${state.chunksTotal}`;
   byId("chunksList").innerHTML = state.chunks
     .map((item) => `
       <article class="list-item ${item.id === state.selectedChunkId ? "is-selected" : ""}" data-chunk-item="${escapeHtml(item.id)}">
@@ -667,6 +843,7 @@ function renderChunks() {
   qsa("[data-chunk-item]", byId("chunksList")).forEach((node) =>
     node.addEventListener("click", () => openChunk(node.dataset.chunkItem))
   );
+  renderLoadMore("chunksList", state.chunksTotal, state.chunks.length, () => loadChunks(true));
 }
 
 async function openChunk(id) {
@@ -737,15 +914,22 @@ function createFactFromSelectedChunk() {
   setTab("facts");
 }
 
-async function loadPipelineExplorer() {
+async function loadPipelineExplorer(append = false) {
+  if (!append) state.pipelineEventsOffset = 0;
   const search = byId("pipelineEventSearch").value;
   const [summary, events, jobs] = await Promise.all([
     api("/api/pipeline/summary"),
-    api(`/api/pipeline/events?${new URLSearchParams({ search, limit: "300" }).toString()}`),
+    api(`/api/pipeline/events?${new URLSearchParams({ search, limit: String(PAGE_SIZE), offset: String(state.pipelineEventsOffset) }).toString()}`),
     api("/api/llm/jobs?limit=200"),
   ]);
   state.pipelineSummary = summary;
-  state.pipelineEvents = events.items || [];
+  if (append) {
+    state.pipelineEvents = state.pipelineEvents.concat(events.items || []);
+  } else {
+    state.pipelineEvents = events.items || [];
+  }
+  state.pipelineEventsTotal = events.total || 0;
+  state.pipelineEventsOffset = state.pipelineEvents.length;
   state.llmJobs = jobs.items || [];
   renderPipelineExplorer();
 }
@@ -753,7 +937,7 @@ async function loadPipelineExplorer() {
 function renderPipelineExplorer() {
   const metadata = state.pipelineSummary?.metadata || {};
   byId("pipelineMetadata").value = prettyJson(metadata);
-  byId("pipelineEventCount").textContent = `${state.pipelineEvents.length} событий`;
+  byId("pipelineEventCount").textContent = `${state.pipelineEvents.length}/${state.pipelineEventsTotal}`;
   byId("pipelineJobsCount").textContent = `${state.llmJobs.length} jobs`;
   byId("pipelineEventsList").innerHTML = state.pipelineEvents.length
     ? state.pipelineEvents
@@ -776,6 +960,7 @@ function renderPipelineExplorer() {
       byId("pipelineDetail").value = prettyJson(payload);
     })
   );
+  renderLoadMore("pipelineEventsList", state.pipelineEventsTotal, state.pipelineEvents.length, () => loadPipelineExplorer(true));
   byId("pipelineJobsList").innerHTML = state.llmJobs.length
     ? state.llmJobs
         .map((item) => `
@@ -894,15 +1079,22 @@ function renderTimelineExplorer() {
   );
 }
 
-async function loadLlmExplorer() {
+async function loadLlmExplorer(append = false) {
   const runId = byId("llmRunSelect").value;
   const search = byId("llmSearch").value;
+  if (!append) state.llmTracesOffset = 0;
   const [runsPayload, tracesPayload] = await Promise.all([
     api("/api/llm/runs"),
-    api(`/api/llm/traces?${new URLSearchParams({ run_id: runId, search, limit: "300" }).toString()}`),
+    api(`/api/llm/traces?${new URLSearchParams({ run_id: runId, search, limit: String(PAGE_SIZE), offset: String(state.llmTracesOffset) }).toString()}`),
   ]);
   state.llmRuns = runsPayload.items || [];
-  state.llmTraces = tracesPayload.items || [];
+  if (append) {
+    state.llmTraces = state.llmTraces.concat(tracesPayload.items || []);
+  } else {
+    state.llmTraces = tracesPayload.items || [];
+  }
+  state.llmTracesTotal = tracesPayload.total || 0;
+  state.llmTracesOffset = state.llmTraces.length;
   renderLlmExplorer(runId);
   if (state.selectedLlmTraceRef) {
     await loadLlmTraceDetail(state.selectedLlmTraceRef).catch(() => {});
@@ -911,7 +1103,7 @@ async function loadLlmExplorer() {
 
 function renderLlmExplorer(currentRunId = "") {
   fillSelect(byId("llmRunSelect"), state.llmRuns.map((item) => item.id), true, currentRunId);
-  byId("llmTraceCount").textContent = `${state.llmTraces.length} trace`;
+  byId("llmTraceCount").textContent = `${state.llmTraces.length}/${state.llmTracesTotal}`;
   byId("llmRunsInfo").textContent = state.llmRuns.length
     ? state.llmRuns.map((item) => `${item.id}: ${item.trace_count}`).join(" | ")
     : "Run-ов пока нет.";
@@ -932,6 +1124,7 @@ function renderLlmExplorer(currentRunId = "") {
   qsa("[data-llm-trace]", byId("llmTraceList")).forEach((node) =>
     node.addEventListener("click", () => openLlmTrace(node.dataset.llmTrace))
   );
+  renderLoadMore("llmTraceList", state.llmTracesTotal, state.llmTraces.length, () => loadLlmExplorer(true));
 }
 
 async function openLlmTrace(traceRef) {
@@ -987,14 +1180,22 @@ function newLlmRun() {
 
 async function runLlmPrompt() {
   const form = byId("llmForm");
+  const userText = form.elements.namedItem("user").value;
+  if (!validateRequired([["User prompt", userText]])) return;
+  const rfText = form.elements.namedItem("response_format").value;
+  const rf = tryParseJson(rfText);
+  if (!rf.ok) {
+    toast(`Response format: невалидный JSON — ${rf.error}`, true);
+    return;
+  }
   const payload = {
     system: form.elements.namedItem("system").value,
-    user: form.elements.namedItem("user").value,
+    user: userText,
     model_override: form.elements.namedItem("model_override").value,
     max_tokens: form.elements.namedItem("max_tokens").value ? Number(form.elements.namedItem("max_tokens").value) : null,
     temperature: form.elements.namedItem("temperature").value ? Number(form.elements.namedItem("temperature").value) : null,
     log_prefix: form.elements.namedItem("log_prefix").value,
-    response_format: form.elements.namedItem("response_format").value,
+    response_format: rf.value,
   };
   const created = await api("/api/llm/run", { method: "POST", body: JSON.stringify(payload) });
   state.selectedLlmTraceRef = created.trace_ref;
@@ -1011,6 +1212,12 @@ async function rerunLlmTrace() {
     return;
   }
   const form = byId("llmForm");
+  const rfText = form.elements.namedItem("response_format").value;
+  const rf = tryParseJson(rfText);
+  if (!rf.ok) {
+    toast(`Response format: невалидный JSON — ${rf.error}`, true);
+    return;
+  }
   const payload = {
     system: form.elements.namedItem("system").value,
     user: form.elements.namedItem("user").value,
@@ -1018,7 +1225,7 @@ async function rerunLlmTrace() {
     max_tokens: form.elements.namedItem("max_tokens").value ? Number(form.elements.namedItem("max_tokens").value) : null,
     temperature: form.elements.namedItem("temperature").value ? Number(form.elements.namedItem("temperature").value) : null,
     log_prefix: form.elements.namedItem("log_prefix").value,
-    response_format: form.elements.namedItem("response_format").value,
+    response_format: rf.value,
   };
   const created = await api(`/api/llm/traces/${encodeURIComponent(traceRef)}/rerun`, {
     method: "POST",
@@ -1069,32 +1276,36 @@ async function refreshStudio() {
 
 function bindEvents() {
   qsa(".tab").forEach((tab) => tab.addEventListener("click", () => activateTab(tab.dataset.tab)));
-  byId("refreshBtn").addEventListener("click", () => refreshStudio().catch((err) => toast(err.message, true)));
-  byId("undoBtn").addEventListener("click", () => undoLast().catch((err) => toast(err.message, true)));
-  byId("exportBtn").addEventListener("click", () => exportFinal().catch((err) => toast(err.message, true)));
+  byId("refreshBtn").addEventListener("click", () => withLoading(byId("refreshBtn"), () => refreshStudio()).catch((err) => toast(err.message, true)));
+  byId("undoBtn").addEventListener("click", () => withLoading(byId("undoBtn"), () => undoLast()).catch((err) => toast(err.message, true)));
+  byId("exportBtn").addEventListener("click", () => withLoading(byId("exportBtn"), () => exportFinal()).catch((err) => toast(err.message, true)));
 
-  byId("factFilterBtn").addEventListener("click", () => loadFacts().catch((err) => toast(err.message, true)));
+  byId("factFilterBtn").addEventListener("click", () => withLoading(byId("factFilterBtn"), () => loadFacts()).catch((err) => toast(err.message, true)));
   byId("newFactBtn").addEventListener("click", newFact);
-  byId("saveFactBtn").addEventListener("click", () => saveFact().catch((err) => toast(err.message, true)));
-  byId("deleteFactBtn").addEventListener("click", () => deleteFact().catch((err) => toast(err.message, true)));
-  byId("reanalyzeSelectedBtn").addEventListener("click", () => reanalyzeFacts(false).catch((err) => toast(err.message, true)));
-  byId("reanalyzeBundleBtn").addEventListener("click", () => reanalyzeFacts(true).catch((err) => toast(err.message, true)));
-  byId("generateVoiceBtn").addEventListener("click", () => generateFromFacts("voice").catch((err) => toast(err.message, true)));
-  byId("generateSynthBtn").addEventListener("click", () => generateFromFacts("synth").catch((err) => toast(err.message, true)));
+  byId("saveFactBtn").addEventListener("click", () => withLoading(byId("saveFactBtn"), () => saveFact()).catch((err) => toast(err.message, true)));
+  byId("deleteFactBtn").addEventListener("click", () => withLoading(byId("deleteFactBtn"), () => deleteFact()).catch((err) => toast(err.message, true)));
+  byId("reanalyzeSelectedBtn").addEventListener("click", () => withLoading(byId("reanalyzeSelectedBtn"), () => reanalyzeFacts(false)).catch((err) => toast(err.message, true)));
+  byId("reanalyzeBundleBtn").addEventListener("click", () => withLoading(byId("reanalyzeBundleBtn"), () => reanalyzeFacts(true)).catch((err) => toast(err.message, true)));
+  byId("generateVoiceBtn").addEventListener("click", () => withLoading(byId("generateVoiceBtn"), () => generateFromFacts("voice")).catch((err) => toast(err.message, true)));
+  byId("generateSynthBtn").addEventListener("click", () => withLoading(byId("generateSynthBtn"), () => generateFromFacts("synth")).catch((err) => toast(err.message, true)));
   byId("relationCreateForm").addEventListener("submit", (event) => createRelation(event).catch((err) => toast(err.message, true)));
 
-  byId("chunkFilterBtn").addEventListener("click", () => loadChunks().catch((err) => toast(err.message, true)));
+  byId("batchApproveBtn").addEventListener("click", () => withLoading(byId("batchApproveBtn"), () => batchSetReviewStatus("approved")).catch((err) => toast(err.message, true)));
+  byId("batchRejectBtn").addEventListener("click", () => withLoading(byId("batchRejectBtn"), () => batchSetReviewStatus("rejected")).catch((err) => toast(err.message, true)));
+  byId("batchNeedsWorkBtn").addEventListener("click", () => withLoading(byId("batchNeedsWorkBtn"), () => batchSetReviewStatus("needs_work")).catch((err) => toast(err.message, true)));
+
+  byId("chunkFilterBtn").addEventListener("click", () => withLoading(byId("chunkFilterBtn"), () => loadChunks()).catch((err) => toast(err.message, true)));
   byId("chunkCreateFactBtn").addEventListener("click", createFactFromSelectedChunk);
 
-  byId("voiceFilterBtn").addEventListener("click", () => loadSamples("voice").catch((err) => toast(err.message, true)));
+  byId("voiceFilterBtn").addEventListener("click", () => withLoading(byId("voiceFilterBtn"), () => loadSamples("voice")).catch((err) => toast(err.message, true)));
   byId("newVoiceBtn").addEventListener("click", () => newSample("voice"));
-  byId("saveVoiceBtn").addEventListener("click", () => saveSample("voice").catch((err) => toast(err.message, true)));
-  byId("deleteVoiceBtn").addEventListener("click", () => deleteSample("voice").catch((err) => toast(err.message, true)));
+  byId("saveVoiceBtn").addEventListener("click", () => withLoading(byId("saveVoiceBtn"), () => saveSample("voice")).catch((err) => toast(err.message, true)));
+  byId("deleteVoiceBtn").addEventListener("click", () => withLoading(byId("deleteVoiceBtn"), () => deleteSample("voice")).catch((err) => toast(err.message, true)));
 
-  byId("synthFilterBtn").addEventListener("click", () => loadSamples("synth").catch((err) => toast(err.message, true)));
+  byId("synthFilterBtn").addEventListener("click", () => withLoading(byId("synthFilterBtn"), () => loadSamples("synth")).catch((err) => toast(err.message, true)));
   byId("newSynthBtn").addEventListener("click", () => newSample("synth"));
-  byId("saveSynthBtn").addEventListener("click", () => saveSample("synth").catch((err) => toast(err.message, true)));
-  byId("deleteSynthBtn").addEventListener("click", () => deleteSample("synth").catch((err) => toast(err.message, true)));
+  byId("saveSynthBtn").addEventListener("click", () => withLoading(byId("saveSynthBtn"), () => saveSample("synth")).catch((err) => toast(err.message, true)));
+  byId("deleteSynthBtn").addEventListener("click", () => withLoading(byId("deleteSynthBtn"), () => deleteSample("synth")).catch((err) => toast(err.message, true)));
 
   byId("newThemeBtn").addEventListener("click", () => {
     state.selectedThemeId = null;
@@ -1104,17 +1315,17 @@ function bindEvents() {
     form.reset();
     form.elements.namedItem("color").value = "#ffb347";
   });
-  byId("saveThemeBtn").addEventListener("click", () => saveTheme().catch((err) => toast(err.message, true)));
-  byId("deleteThemeBtn").addEventListener("click", () => deleteTheme().catch((err) => toast(err.message, true)));
+  byId("saveThemeBtn").addEventListener("click", () => withLoading(byId("saveThemeBtn"), () => saveTheme()).catch((err) => toast(err.message, true)));
+  byId("deleteThemeBtn").addEventListener("click", () => withLoading(byId("deleteThemeBtn"), () => deleteTheme()).catch((err) => toast(err.message, true)));
   byId("themeMergeForm").addEventListener("submit", (event) => mergeThemes(event).catch((err) => toast(err.message, true)));
 
-  byId("pipelineRefreshBtn").addEventListener("click", () => loadPipelineExplorer().catch((err) => toast(err.message, true)));
-  byId("timelineFilterBtn").addEventListener("click", () => loadTimelineExplorer().catch((err) => toast(err.message, true)));
+  byId("pipelineRefreshBtn").addEventListener("click", () => withLoading(byId("pipelineRefreshBtn"), () => loadPipelineExplorer()).catch((err) => toast(err.message, true)));
+  byId("timelineFilterBtn").addEventListener("click", () => withLoading(byId("timelineFilterBtn"), () => loadTimelineExplorer()).catch((err) => toast(err.message, true)));
 
-  byId("llmFilterBtn").addEventListener("click", () => loadLlmExplorer().catch((err) => toast(err.message, true)));
+  byId("llmFilterBtn").addEventListener("click", () => withLoading(byId("llmFilterBtn"), () => loadLlmExplorer()).catch((err) => toast(err.message, true)));
   byId("llmNewRunBtn").addEventListener("click", newLlmRun);
-  byId("llmRunBtn").addEventListener("click", () => runLlmPrompt().catch((err) => toast(err.message, true)));
-  byId("llmRerunBtn").addEventListener("click", () => rerunLlmTrace().catch((err) => toast(err.message, true)));
+  byId("llmRunBtn").addEventListener("click", () => withLoading(byId("llmRunBtn"), () => runLlmPrompt()).catch((err) => toast(err.message, true)));
+  byId("llmRerunBtn").addEventListener("click", () => withLoading(byId("llmRerunBtn"), () => rerunLlmTrace()).catch((err) => toast(err.message, true)));
 }
 
 document.addEventListener("DOMContentLoaded", async () => {

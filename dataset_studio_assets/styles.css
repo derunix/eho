@@ -79,6 +79,26 @@ textarea { resize: vertical; }
 .pill.rejected { background: #f8dddd; color: #8a3131; }
 
 .hidden { display: none !important; }
+
+button:disabled { opacity: 0.55; cursor: not-allowed; }
+.load-more-btn { width: 100%; padding: 10px; text-align: center; border: 1px dashed var(--line); background: var(--panel-2); color: var(--muted); border-radius: 10px; cursor: pointer; margin-top: 8px; }
+.load-more-btn:hover { background: #f5eee2; color: var(--text); }
+
+.batch-toolbar { grid-template-columns: auto 1fr; align-items: center; }
+.batch-label { white-space: nowrap; }
+.batch-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.pill-btn { border-radius: 999px; padding: 6px 14px; font-size: 13px; border: 1px solid var(--line); cursor: pointer; }
+.pill-btn.approved { background: #dff2e2; color: #2f6738; border-color: #b8dfc0; }
+.pill-btn.approved:hover { background: #c5e8cb; }
+.pill-btn.needs_work { background: #fff1cf; color: #8a5d12; border-color: #e8d5a0; }
+.pill-btn.needs_work:hover { background: #ffe9b0; }
+.pill-btn.rejected { background: #f8dddd; color: #8a3131; border-color: #d9abab; }
+.pill-btn.rejected:hover { background: #f0c5c5; }
+
+.suggestion-item { border-left: 4px solid var(--line); }
+.suggestion-keep { border-left-color: #6abd73; }
+.suggestion-drop { border-left-color: #d47070; }
+.suggestion-fact { margin: 6px 0; padding: 6px 10px; background: #faf7f1; border-radius: 8px; font-size: 14px; }
 .toast { position: fixed; right: 20px; bottom: 20px; min-width: 240px; max-width: 420px; background: #2d2a26; color: #fff; padding: 14px 16px; border-radius: 12px; box-shadow: 0 14px 32px rgba(0,0,0,0.25); }
 .llm-layout textarea[readonly],
 #pipelineMetadata,
