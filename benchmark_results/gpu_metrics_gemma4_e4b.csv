@@ -1,0 +1,2 @@
+timestamp, utilization.gpu [%], utilization.memory [%], memory.used [MiB], memory.free [MiB], memory.total [MiB], temperature.gpu, power.draw [W], power.limit [W], clocks.current.graphics [MHz], clocks.current.memory [MHz]
+2026/04/12 02:52:33.969, 39, 25, 3036, 2885, 6141, 66, 21.19, [N/A], 1950, 8201

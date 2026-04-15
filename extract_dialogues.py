@@ -129,7 +129,7 @@ class Config:
     # API локальной модели
     api_base: str = "http://localhost:11434/v1"  # ollama по умолчанию
     api_key: str = "ollama"                       # ollama не требует ключа
-    model: str = "gemma4"
+    model: str = "gemma4:e2b"
 
     # Генерация
     temperature: float = 0.1     # низкая — нужна точность, не креатив
@@ -8559,7 +8559,7 @@ def main() -> int:
     parser.add_argument("--books-dir", default="./books", help="Папка с .fb2/.txt книгами")
     parser.add_argument("--output-dir", default="./output", help="Папка для результатов")
     parser.add_argument("--api-base", default="http://localhost:11434/v1", help="URL API модели")
-    parser.add_argument("--model", default="gemma4:e4b", help="Название модели")
+    parser.add_argument("--model", default="gemma4:e2b", help="Название модели")
     parser.add_argument("--chunk-size", type=int, default=Config.chunk_size, help="Размер фрагмента в токенах")
     parser.add_argument("--no-auto-serve", action="store_true",
                         help="Не запускать ollama автоматически")
@@ -8569,8 +8569,8 @@ def main() -> int:
                         help="Макс. количество синтетических пар на книгу (по умолчанию 500)")
     parser.add_argument("--no-resume", action="store_true",
                         help="Не пропускать уже обработанные книги, начать заново")
-    parser.add_argument("--workers", type=int, default=2,
-                        help="Количество параллельных воркеров (по умолчанию 2)")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="Количество параллельных воркеров (по умолчанию 1)")
     parser.add_argument("--voice-extractor", choices=("regex", "llm"), default="regex",
                         help="Чем извлекать голос Макса: быстрым regex или LLM (по умолчанию regex)")
     parser.add_argument("--knowledge-protocol", choices=("lines", "json"), default="lines",

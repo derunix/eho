@@ -1,0 +1,3215 @@
+{
+  "benchmark_meta": {
+    "timestamp": "2026-04-12T01:02:54.552957",
+    "vram_baseline_used_mb": 4301.0,
+    "system": {
+      "gpu": "NVIDIA GeForce RTX 4050 Laptop 6GB",
+      "cpu": "13th Gen Intel Core i7-13650HX",
+      "ram_gb": 64,
+      "disk": "2x Samsung NVMe SSD 3.64TB"
+    },
+    "tag": "single",
+    "est_chunks_per_book": 120,
+    "theoretical_decode_ceiling_toks": 55.0
+  },
+  "models": {
+    "gemma4:e4b": {
+      "spec": {
+        "group": "A",
+        "params_total": "12B MoE",
+        "params_active": "4.5B",
+        "vram_est_gb": 5.5,
+        "notes": "MoE 128K ctx, Google"
+      },
+      "model_info": {
+        "model_name": "gemma4:e4b",
+        "size_vram": 1192359168,
+        "size_total": 10773996800,
+        "offload_ratio": 0.11067008744609985,
+        "size_vram_mb": 1137.122314453125,
+        "size_total_mb": 10274.884033203125,
+        "quantization": "Q4_K_M",
+        "parameter_size": "8.0B",
+        "family": "gemma4"
+      },
+      "gpu_metrics": {
+        "vram_used_peak_mb": 5349.0,
+        "vram_used_avg_mb": 5186.6,
+        "vram_free_min_mb": 572.0,
+        "gpu_util_avg": 43.8,
+        "gpu_util_max": 81.0,
+        "mem_util_avg": 28.0,
+        "temp_avg_c": 71.1,
+        "temp_max_c": 74.0,
+        "power_avg_w": 36.5,
+        "power_max_w": 46.18,
+        "power_limit_w": null,
+        "gpu_clock_avg_mhz": 2702.0,
+        "vram_clock_avg_mhz": 8201.0,
+        "is_throttling": false,
+        "samples": 133
+      },
+      "cpu_metrics": {},
+      "bottleneck": "CPU_OFFLOAD",
+      "aggregate": {
+        "avg_hit_rate": 0.1458,
+        "avg_precision": 1.0,
+        "avg_time_sec": 30.013,
+        "format_reliability": 0.375,
+        "avg_eval_rate": 8.02,
+        "avg_prompt_eval_rate": 1559.3,
+        "avg_total_tokens": 1127.0,
+        "estimated_pipeline_hours": 32.0,
+        "estimated_pipeline_hours_ensemble": 41.6,
+        "quality_speed_score": 0.004859,
+        "quality_score": 0.054687,
+        "efficiency_score": 0.000908
+      },
+      "cases": [
+        {
+          "case_id": "stranger_01_juffin_intro",
+          "quality": {
+            "hit_rate": 0.0,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 3,
+            "hits": [
+              false,
+              false
+            ],
+            "misses": [
+              "subject~'Джуффин' fact~'шеф'",
+              "subject~'Макс' fact~'камр'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "character",
+                "subject": "Джуффин",
+                "fact": "Джуффин поручает Максу разобраться в какой-то ситуации.",
+                "time_scope": "current"
+              },
+              {
+                "category": "character",
+                "subject": "Макс",
+                "fact": "Макс скептически относится к поручениям Джуффина.",
+                "time_scope": "current"
+              },
+              {
+                "category": "custom",
+                "subject": "камра",
+                "fact": "Камра — напиток, который Макс не смог допить.",
+                "time_scope": "current"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 13828990369,
+            "load_duration_ns": 393063303,
+            "prompt_eval_count": 864,
+            "prompt_eval_duration_ns": 1413711999,
+            "prompt_eval_rate": 611.16,
+            "eval_count": 101,
+            "eval_duration_ns": 11908351646,
+            "eval_rate": 8.48,
+            "overhead_ms": 113.86,
+            "total_tokens": 965,
+            "effective_time_sec": 13.829,
+            "decode_efficiency": 0.154
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5255.0
+          },
+          "wall_clock_sec": 13.831,
+          "raw_response": "category=character | subject=Джуффин | fact=Джуффин поручает Максу разобраться в какой-то ситуации. | time_scope=current\ncategory=character | subject=Макс | fact=Макс скептически относится к поручениям Джуффина. | time_scope=current\ncategory=custom | subject=камра | fact=Камра — напиток, который Макс не смог допить. | time_scope=current"
+        },
+        {
+          "case_id": "stranger_02_house_bridge",
+          "quality": {
+            "hit_rate": 0.0,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 5,
+            "total_facts": 0,
+            "hits": [
+              false,
+              false,
+              false,
+              false,
+              false
+            ],
+            "misses": [
+              "subject~'Дом у Моста' fact~'Тайн'",
+              "subject~'Дом у Моста' fact~'Хурон'",
+              "subject~'Гуриг' fact~'подарил'",
+              "subject~'Орден Семилистника' fact~'резиденци'",
+              "subject~'Кофа Йох'"
+            ],
+            "noise_markers": [],
+            "facts": []
+          },
+          "llm_metrics": {
+            "total_duration_ns": 22498585756,
+            "load_duration_ns": 228088307,
+            "prompt_eval_count": 895,
+            "prompt_eval_duration_ns": 523349406,
+            "prompt_eval_rate": 1710.14,
+            "eval_count": 187,
+            "eval_duration_ns": 21585032531,
+            "eval_rate": 8.66,
+            "overhead_ms": 162.12,
+            "total_tokens": 1082,
+            "effective_time_sec": 22.499,
+            "decode_efficiency": 0.158
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5220.0
+          },
+          "wall_clock_sec": 22.5,
+          "raw_response": "place=Дом у Моста | fact=Дом у Моста — мрачноватое старое здание на левом берегу Хурона. | time_scope=timeless\nplace=Дом у Моста | fact=Внутри Дома у Моста пахнет камрой и чем-то вкусным с кухни. | time_scope=timeless\norganization=Малое Тайное Сыскное Войско | fact=Малое Тайное Сыскное Войско базируется в Доме у Моста. | time_scope=timeless\nhistory=Дом у Моста | fact=Дом у Моста был подарен Гуригом Восьмым. | time_scope=past\nhistory=Дом у Моста | fact=Ранее в Доме у Моста была резиденция Ордена Семилистника. | time_scope=past"
+        },
+        {
+          "case_id": "master_winds_03_magic",
+          "quality": {
+            "hit_rate": 0.0,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 5,
+            "total_facts": 0,
+            "hits": [
+              false,
+              false,
+              false,
+              false,
+              false,
+              false
+            ],
+            "misses": [
+              "subject~'Кодекс Хрембера' fact~'Очевидн'",
+              "subject~'Кодекс Хрембера' fact~'ступен'",
+              "subject~'Холоми' fact~'тюрьм'",
+              "subject~'Холоми' fact~'колдовать'",
+              "subject~'Безмолвная речь' fact~'общени'",
+              "subject~'Кодекс Хрембера' fact~'отменён'"
+            ],
+            "noise_markers": [],
+            "facts": []
+          },
+          "llm_metrics": {
+            "total_duration_ns": 22715799911,
+            "load_duration_ns": 204048206,
+            "prompt_eval_count": 913,
+            "prompt_eval_duration_ns": 509884416,
+            "prompt_eval_rate": 1790.6,
+            "eval_count": 174,
+            "eval_duration_ns": 21876293860,
+            "eval_rate": 7.95,
+            "overhead_ms": 125.57,
+            "total_tokens": 1087,
+            "effective_time_sec": 22.716,
+            "decode_efficiency": 0.145
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5216.0
+          },
+          "wall_clock_sec": 22.717,
+          "raw_response": "magic=Кодекс Хрембера | fact=Кодекс Хрембера устанавливал ограничения на использование Очевидной магии, разрешая использовать магию только до определённой ступени. | time_scope=past\nplace=Холоми | fact=Холоми — тюрьма-крепость, в которой невозможно колдовать. | time_scope=timeless\nplace=Холоми | fact=Холоми была построена во времена Эпохи Орденов. | time_scope=past\nmagic=Безмолвная речь | fact=Безмолвная речь — это мысленное общение на расстоянии. | time_scope=timeless\ncharacter=Шурф | fact=Шурф объясняет правила использования магии и о Кодексе Хрембера. | time_scope=current"
+        },
+        {
+          "case_id": "dark_side_04_flashback",
+          "quality": {
+            "hit_rate": 0.6667,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 8,
+            "hits": [
+              false,
+              true,
+              true,
+              true,
+              false,
+              true
+            ],
+            "misses": [
+              "subject~'Смутные Времена' fact~'Орден'",
+              "subject~'Нуфлин Мони Мах' fact~'Кеттарийски'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "character",
+                "subject": "Сэр Манга Мелифаро",
+                "fact": "Сэр Манга Мелифаро — коллега, который рассказывал о Смутных Временах.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "group",
+                "subject": "Орден Семилистника",
+                "fact": "Орден Семилистника объединился с Орденом Потаённой Травы против Ордена Водяной Вороны во время Смутных Времен.",
+                "time_scope": "past"
+              },
+              {
+                "category": "group",
+                "subject": "Орден Потаённой Травы",
+                "fact": "Орден Потаённой Травы объединился с Орденом Семилистника против Ордена Водяной Вороны во время Смутных Времен.",
+                "time_scope": "past"
+              },
+              {
+                "category": "group",
+                "subject": "Орден Водяной Вороны",
+                "fact": "Орден Водяной Вороны был одним из орденов, воевавшим во время Смутных Времен.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Лойсо Пондохва",
+                "fact": "Лойсо Пондохва был Великим Магистром Водяной Вороны и одним из самых могущественных магов Смутных Времен.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Нуфлин Мони Мах",
+                "fact": "Нуфлин Мони Мах был Великим Магистром Семилистника и был хитрее, чем силен.",
+                "time_scope": "past"
+              },
+              {
+                "category": "group",
+                "subject": "Кеттарийские Охотники",
+                "fact": "Кеттарийские Охотники заключили союз с Нуфлином Мони Махом и решили исход войны во время Смутных Времен.",
+                "time_scope": "past"
+              },
+              {
+                "category": "custom",
+                "subject": "камра",
+                "fact": "Камра — напиток, который пьют за ужином.",
+                "time_scope": "timeless"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 57142835585,
+            "load_duration_ns": 206271391,
+            "prompt_eval_count": 927,
+            "prompt_eval_duration_ns": 527631317,
+            "prompt_eval_rate": 1756.91,
+            "eval_count": 426,
+            "eval_duration_ns": 56081051094,
+            "eval_rate": 7.6,
+            "overhead_ms": 327.88,
+            "total_tokens": 1353,
+            "effective_time_sec": 57.143,
+            "decode_efficiency": 0.138
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5207.0
+          },
+          "wall_clock_sec": 57.145,
+          "raw_response": "category=character | subject=Сэр Манга Мелифаро | fact=Сэр Манга Мелифаро — коллега, который рассказывал о Смутных Временах. | time_scope=timeless\ncategory=group | subject=Орден Семилистника | fact=Орден Семилистника объединился с Орденом Потаённой Травы против Ордена Водяной Вороны во время Смутных Времен. | time_scope=past\ncategory=group | subject=Орден Потаённой Травы | fact=Орден Потаённой Травы объединился с Орденом Семилистника против Ордена Водяной Вороны во время Смутных Времен. | time_scope=past\ncategory=group | subject=Орден Водяной Вороны | fact=Орден Водяной Вороны был одним из орденов, воевавшим во время Смутных Времен. | time_scope=past\ncategory=character | subject=Лойсо Пондохва | fact=Лойсо Пондохва был Великим Магистром Водяной Вороны и одним из самых могущественных магов Смутных Времен. | time_scope=past\ncategory=character | subject=Нуфлин Мони Мах | fact=Нуфлин Мони Мах был Великим Магистром Семилистника и был хитрее, чем силен. | time_scope=past\ncategory=group | subject=Кеттарийские Охотники | fact=Кеттарийские Охотники заключили союз с Нуфлином Мони Махом и решили исход войны во время Смутных Времен. | time_scope=past\ncategory=custom | subject=камра | fact=Камра — напиток, который пьют за ужином. | time_scope=timeless"
+        },
+        {
+          "case_id": "dreams_05_dense_dialogue",
+          "quality": {
+            "hit_rate": 0.5,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 4,
+            "hits": [
+              false,
+              true
+            ],
+            "misses": [
+              "subject~'Обжора Бунба'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Дом у Моста является местом, откуда герои вышли.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "улица Медных Горшков",
+                "fact": "Улица Медных Горшков — улица, по которой герои направлялись.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "custom",
+                "subject": "Обжора Бунбу",
+                "fact": "«Обжора Бунбу» — заведение, куда направлялись герои.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "character",
+                "subject": "Мелифаро",
+                "fact": "Мелифаро выражает удивление по поводу сна главного героя.",
+                "time_scope": "past"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 19796243430,
+            "load_duration_ns": 272384939,
+            "prompt_eval_count": 894,
+            "prompt_eval_duration_ns": 559582070,
+            "prompt_eval_rate": 1597.62,
+            "eval_count": 153,
+            "eval_duration_ns": 18845883917,
+            "eval_rate": 8.12,
+            "overhead_ms": 118.39,
+            "total_tokens": 1047,
+            "effective_time_sec": 19.796,
+            "decode_efficiency": 0.148
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5134.0
+          },
+          "wall_clock_sec": 19.798,
+          "raw_response": "category=place | subject=Дом у Моста | fact=Дом у Моста является местом, откуда герои вышли. | time_scope=timeless\ncategory=place | subject=улица Медных Горшков | fact=Улица Медных Горшков — улица, по которой герои направлялись. | time_scope=timeless\ncategory=custom | subject=Обжора Бунбу | fact=«Обжора Бунбу» — заведение, куда направлялись герои. | time_scope=timeless\ncategory=character | subject=Мелифаро | fact=Мелифаро выражает удивление по поводу сна главного героя. | time_scope=past"
+        },
+        {
+          "case_id": "dreams_06_landscape",
+          "quality": {
+            "hit_rate": 0.0,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 5,
+            "total_facts": 0,
+            "hits": [
+              false
+            ],
+            "misses": [
+              "subject~'Мохнатый Дом' fact~'башн'"
+            ],
+            "noise_markers": [],
+            "facts": []
+          },
+          "llm_metrics": {
+            "total_duration_ns": 19859308540,
+            "load_duration_ns": 224951749,
+            "prompt_eval_count": 885,
+            "prompt_eval_duration_ns": 522948476,
+            "prompt_eval_rate": 1692.33,
+            "eval_count": 154,
+            "eval_duration_ns": 18999106046,
+            "eval_rate": 8.11,
+            "overhead_ms": 112.3,
+            "total_tokens": 1039,
+            "effective_time_sec": 19.859,
+            "decode_efficiency": 0.147
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5224.0
+          },
+          "wall_clock_sec": 19.861,
+          "raw_response": "place=Мохнатый Дом | fact=Мохнатый Дом имеет башню на крыше. | time_scope=timeless\nplace=Ехо | fact=Небо над Ехо имеет невозможный цвет. | time_scope=timeless\nplace=Ехо | fact=В Ехо случаются закаты, окрашенные в цвет перезрелого абрикоса и расплавленного золота. | time_scope=timeless\nplace=улицы | fact=На улицах Ехо зажигаются фонари. | time_scope=timeless\nplace=трактир | fact=В трактире на углу слышен громкий смех. | time_scope=current"
+        },
+        {
+          "case_id": "stranger_07_shurf",
+          "quality": {
+            "hit_rate": 0.0,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 8,
+            "total_facts": 0,
+            "hits": [
+              false,
+              false,
+              false,
+              false,
+              false,
+              false,
+              false
+            ],
+            "misses": [
+              "subject~'Шурф Лонли-Локли' fact~'Пресекающий'",
+              "subject~'Шурф Лонли-Локли' fact~'Перчатки Смерти'",
+              "subject~'Шурф Лонли-Локли' fact~'Ледяной Руки'",
+              "subject~'Шурф Лонли-Локли' fact~'Рыбник'",
+              "subject~'Шурф Лонли-Локли' fact~'Дырявой Чаши'",
+              "subject~'Шурф Лонли-Локли' fact~'Хумгат'",
+              "subject~'Шурф Лонли-Локли' fact~'Хельн'"
+            ],
+            "noise_markers": [],
+            "facts": []
+          },
+          "llm_metrics": {
+            "total_duration_ns": 44156822342,
+            "load_duration_ns": 223856510,
+            "prompt_eval_count": 930,
+            "prompt_eval_duration_ns": 567731342,
+            "prompt_eval_rate": 1638.1,
+            "eval_count": 340,
+            "eval_duration_ns": 43130522573,
+            "eval_rate": 7.88,
+            "overhead_ms": 234.71,
+            "total_tokens": 1270,
+            "effective_time_sec": 44.157,
+            "decode_efficiency": 0.143
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5182.0
+          },
+          "wall_clock_sec": 44.158,
+          "raw_response": "character=Сэр Шурф Лонли-Локли | fact=Он носил Перчатки Смерти, оружие, изготовленное из рук убитых им магистров Ордена Ледяной Руки. | time_scope=timeless\ncharacter=Сэр Шурф Лонли-Локли | fact=Его официальный титул — Мастер Пресекающий Ненужные Жизни. | time_scope=timeless\ncharacter=Сэр Шурф Лонли-Локли | fact=Он когда-то был Мастером Рыбником в Ордене Дырявой Чаши. | time_scope=past\ncharacter=Сэр Шурф Лонли-Локли | fact=Он был женат на Хельне, поэтессе. | time_scope=past\ncharacter=Сэр Джуффин Халли | fact=Он спас Сэра Шурфа Лонли-Локли, отправив его в Хумгат. | time_scope=past\nplace=Хумгат | fact=В Хумгате Сэр Шурф Лонли-Локли претерпел изменения, став сдержанным. | time_scope=past\norganization=Орден Ледяной Руки | fact=Магистры этого ордена были убиты, и их руки использовались для создания Перчаток Смерти. | time_scope=timeless\norganization=Орден Дырявой Чаши | fact=В этом ордене существовала должность Мастера Рыбником. | time_scope=timeless"
+        },
+        {
+          "case_id": "master_winds_08_customs",
+          "quality": {
+            "hit_rate": 0.0,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 8,
+            "total_facts": 0,
+            "hits": [
+              false,
+              false,
+              false,
+              false
+            ],
+            "misses": [
+              "subject~'камра' fact~'горяч'",
+              "subject~'камра'",
+              "subject~'амобилер' fact~'кристалл'",
+              "subject~'лоохи' fact~'одежд'"
+            ],
+            "noise_markers": [],
+            "facts": []
+          },
+          "llm_metrics": {
+            "total_duration_ns": 40092297396,
+            "load_duration_ns": 207532129,
+            "prompt_eval_count": 887,
+            "prompt_eval_duration_ns": 528758439,
+            "prompt_eval_rate": 1677.51,
+            "eval_count": 288,
+            "eval_duration_ns": 39147707290,
+            "eval_rate": 7.36,
+            "overhead_ms": 208.3,
+            "total_tokens": 1175,
+            "effective_time_sec": 40.092,
+            "decode_efficiency": 0.134
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5111.0
+          },
+          "wall_clock_sec": 40.095,
+          "raw_response": "custom=камра | subject=камра | fact=Камра — горький горячий напиток, который пьют все в Ехо. | time_scope=timeless\ncustom=камра | subject=камра | fact=Камра бодрит лучше любого кофе. | time_scope=timeless\ncustom=технологии | subject=электричество | fact=Электричество отсутствует в Ехо. | time_scope=timeless\ncustom=технологии | subject=телефоны | fact=Телефоны отсутствуют в Ехо. | time_scope=timeless\ncustom=технологии | subject=сигареты | fact=Сигареты отсутствуют в Ехо. | time_scope=timeless\nplace=Ехо | subject=улицы | fact=По улицам Ехо носятся амобилеры. | time_scope=timeless\nvehicle=амобилер | subject=амобилеры | fact=Амобилеры — экипажи, движущиеся на магических кристаллах. | time_scope=timeless\ncustom=одежда | subject=лоохи | fact=Одежда в Ехо называется лоохи, что-то вроде длинной мантии. | time_scope=timeless"
+        }
+      ]
+    },
+    "gemma4:e2b": {
+      "spec": {
+        "group": "A",
+        "params_total": "5B MoE",
+        "params_active": "2.3B",
+        "vram_est_gb": 3.0,
+        "notes": "min quality bound"
+      },
+      "model_info": {
+        "model_name": "gemma4:e2b",
+        "size_vram": 1713294208,
+        "size_total": 7944825536,
+        "offload_ratio": 0.21564906620499513,
+        "size_vram_mb": 1633.9246826171875,
+        "size_total_mb": 7576.776062011719,
+        "quantization": "Q4_K_M",
+        "parameter_size": "5.1B",
+        "family": "gemma4"
+      },
+      "gpu_metrics": {
+        "vram_used_peak_mb": 5414.0,
+        "vram_used_avg_mb": 5241.1,
+        "vram_free_min_mb": 507.0,
+        "gpu_util_avg": 52.0,
+        "gpu_util_max": 66.0,
+        "mem_util_avg": 34.8,
+        "temp_avg_c": 73.2,
+        "temp_max_c": 75.0,
+        "power_avg_w": 41.5,
+        "power_max_w": 61.24,
+        "power_limit_w": null,
+        "gpu_clock_avg_mhz": 2666.0,
+        "vram_clock_avg_mhz": 8201.0,
+        "is_throttling": false,
+        "samples": 59
+      },
+      "cpu_metrics": {},
+      "bottleneck": "CPU_OFFLOAD",
+      "aggregate": {
+        "avg_hit_rate": 0.5601,
+        "avg_precision": 0.9792,
+        "avg_time_sec": 12.473,
+        "format_reliability": 1.0,
+        "avg_eval_rate": 19.53,
+        "avg_prompt_eval_rate": 5002.87,
+        "avg_total_tokens": 1130.0,
+        "estimated_pipeline_hours": 13.3,
+        "estimated_pipeline_hours_ensemble": 17.3,
+        "quality_speed_score": 0.04397,
+        "quality_score": 0.54845,
+        "efficiency_score": 0.008122
+      },
+      "cases": [
+        {
+          "case_id": "stranger_01_juffin_intro",
+          "quality": {
+            "hit_rate": 0.5,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 3,
+            "hits": [
+              false,
+              true
+            ],
+            "misses": [
+              "subject~'Джуффин' fact~'шеф'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "character",
+                "subject": "Джуффин",
+                "fact": "Джуффин предложил Максу заглянуть в одно место и разобраться, что там творится.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Макс",
+                "fact": "Макс не допил камру.",
+                "time_scope": "past"
+              },
+              {
+                "category": "custom",
+                "subject": "камра",
+                "fact": "Камра — горячий напиток, который Макс не допил.",
+                "time_scope": "timeless"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 5951125857,
+            "load_duration_ns": 303763373,
+            "prompt_eval_count": 864,
+            "prompt_eval_duration_ns": 444596957,
+            "prompt_eval_rate": 1943.33,
+            "eval_count": 104,
+            "eval_duration_ns": 5093870045,
+            "eval_rate": 20.42,
+            "overhead_ms": 108.9,
+            "total_tokens": 968,
+            "effective_time_sec": 5.951,
+            "decode_efficiency": 0.371
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5316.0
+          },
+          "wall_clock_sec": 5.953,
+          "raw_response": "category=character | subject=Джуффин | fact=Джуффин предложил Максу заглянуть в одно место и разобраться, что там творится. | time_scope=past\ncategory=character | subject=Макс | fact=Макс не допил камру. | time_scope=past\ncategory=custom | subject=камра | fact=Камра — горячий напиток, который Макс не допил. | time_scope=timeless"
+        },
+        {
+          "case_id": "stranger_02_house_bridge",
+          "quality": {
+            "hit_rate": 0.6,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 8,
+            "hits": [
+              true,
+              true,
+              false,
+              false,
+              true
+            ],
+            "misses": [
+              "subject~'Гуриг' fact~'подарил'",
+              "subject~'Орден Семилистника' fact~'резиденци'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Дом у Моста — мрачное старое здание на левом берегу Хурона.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Дом у Моста имеет башню с часами и узкие стрельчатые окна.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Внутри Дома у Моста есть камины.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "custom",
+                "subject": "Камра",
+                "fact": "Внутри Дома у Моста пахло камрой.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "history",
+                "subject": "Дом у Моста",
+                "fact": "Гуриг Восьмой подарил Дом у Моста Малому Тайному Сыскному Войску.",
+                "time_scope": "past"
+              },
+              {
+                "category": "history",
+                "subject": "Дом у Моста",
+                "fact": "Раньше Дом у Моста был резиденцией Ордена Семилистника.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Джуффин",
+                "fact": "Джуффин сказал, что Дом у Моста теперь дом.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Сэр Кофа Йох",
+                "fact": "Сэр Кофа Йох сидел за столом у окна.",
+                "time_scope": "past"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 15657753507,
+            "load_duration_ns": 279731551,
+            "prompt_eval_count": 895,
+            "prompt_eval_duration_ns": 161766041,
+            "prompt_eval_rate": 5532.68,
+            "eval_count": 300,
+            "eval_duration_ns": 14995323919,
+            "eval_rate": 20.01,
+            "overhead_ms": 220.93,
+            "total_tokens": 1195,
+            "effective_time_sec": 15.658,
+            "decode_efficiency": 0.364
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5341.0
+          },
+          "wall_clock_sec": 15.659,
+          "raw_response": "category=place | subject=Дом у Моста | fact=Дом у Моста — мрачное старое здание на левом берегу Хурона. | time_scope=timeless\ncategory=place | subject=Дом у Моста | fact=Дом у Моста имеет башню с часами и узкие стрельчатые окна. | time_scope=timeless\ncategory=place | subject=Дом у Моста | fact=Внутри Дома у Моста есть камины. | time_scope=timeless\ncategory=custom | subject=Камра | fact=Внутри Дома у Моста пахло камрой. | time_scope=timeless\ncategory=history | subject=Дом у Моста | fact=Гуриг Восьмой подарил Дом у Моста Малому Тайному Сыскному Войску. | time_scope=past\ncategory=history | subject=Дом у Моста | fact=Раньше Дом у Моста был резиденцией Ордена Семилистника. | time_scope=past\ncategory=character | subject=Джуффин | fact=Джуффин сказал, что Дом у Моста теперь дом. | time_scope=past\ncategory=character | subject=Сэр Кофа Йох | fact=Сэр Кофа Йох сидел за столом у окна. | time_scope=past"
+        },
+        {
+          "case_id": "master_winds_03_magic",
+          "quality": {
+            "hit_rate": 0.5,
+            "precision": 0.8333,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 6,
+            "hits": [
+              true,
+              false,
+              true,
+              true,
+              false,
+              false
+            ],
+            "misses": [
+              "subject~'Кодекс Хрембера' fact~'ступен'",
+              "subject~'Безмолвная речь' fact~'общени'",
+              "subject~'Кодекс Хрембера' fact~'отменён'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "magic",
+                "subject": "Кодекс Хрембера",
+                "fact": "Кодекс Хрембера устанавливал ограничения на использование Очевидной магии.",
+                "time_scope": "past"
+              },
+              {
+                "category": "magic",
+                "subject": "Ступени магии",
+                "fact": "Существовало двести тридцать четыре ступени магии.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Холоми",
+                "fact": "Холоми является тюрьмой-крепостью, где невозможно колдовать.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "history",
+                "subject": "Холоми",
+                "fact": "Холоми построена во времена Эпохи Орденов.",
+                "time_scope": "past"
+              },
+              {
+                "category": "magic",
+                "subject": "Безмолвная речь",
+                "fact": "Безмолвная речь — это одна из базовых способностей.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "character",
+                "subject": "Жители Ехо",
+                "fact": "Почти каждый житель Ехо владеет Безмолвной речью.",
+                "time_scope": "current"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 10825919385,
+            "load_duration_ns": 210859335,
+            "prompt_eval_count": 913,
+            "prompt_eval_duration_ns": 159884602,
+            "prompt_eval_rate": 5710.37,
+            "eval_count": 214,
+            "eval_duration_ns": 10311995741,
+            "eval_rate": 20.75,
+            "overhead_ms": 143.18,
+            "total_tokens": 1127,
+            "effective_time_sec": 10.826,
+            "decode_efficiency": 0.377
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5279.0
+          },
+          "wall_clock_sec": 10.827,
+          "raw_response": "category=magic | subject=Кодекс Хрембера | fact=Кодекс Хрембера устанавливал ограничения на использование Очевидной магии. | time_scope=past\ncategory=magic | subject=Ступени магии | fact=Существовало двести тридцать четыре ступени магии. | time_scope=timeless\ncategory=place | subject=Холоми | fact=Холоми является тюрьмой-крепостью, где невозможно колдовать. | time_scope=timeless\ncategory=history | subject=Холоми | fact=Холоми построена во времена Эпохи Орденов. | time_scope=past\ncategory=magic | subject=Безмолвная речь | fact=Безмолвная речь — это одна из базовых способностей. | time_scope=timeless\ncategory=character | subject=Жители Ехо | fact=Почти каждый житель Ехо владеет Безмолвной речью. | time_scope=current"
+        },
+        {
+          "case_id": "dark_side_04_flashback",
+          "quality": {
+            "hit_rate": 0.6667,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 6,
+            "hits": [
+              false,
+              true,
+              true,
+              true,
+              true,
+              false
+            ],
+            "misses": [
+              "subject~'Смутные Времена' fact~'Орден'",
+              "subject~'Манга Мелифаро'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "character",
+                "subject": "Лойсо Пондохва",
+                "fact": "Лойсо Пондохва был Великим Магистром Водяной Вороны.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Нуфлин Мони Мах",
+                "fact": "Нуфлин Мони Мах был Великим Магистром Семилистника.",
+                "time_scope": "past"
+              },
+              {
+                "category": "history",
+                "subject": "Война Орденов",
+                "fact": "Орден Семилистника и Орден Потаённой Травы объединились против Ордена Водяной Вороны.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Лойсо Пондохва",
+                "fact": "Лойсо Пондохва был самым могущественным магом той эпохи.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Нуфлин Мони Мах",
+                "fact": "Нуфлин Мони Мах сумел заключить союз с Кеттарийскими Охотниками.",
+                "time_scope": "past"
+              },
+              {
+                "category": "event",
+                "subject": "Война Орденов",
+                "fact": "Кеттарийские Охотники решили исход войны.",
+                "time_scope": "past"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 17087951335,
+            "load_duration_ns": 236772890,
+            "prompt_eval_count": 927,
+            "prompt_eval_duration_ns": 162123439,
+            "prompt_eval_rate": 5717.87,
+            "eval_count": 307,
+            "eval_duration_ns": 16456929772,
+            "eval_rate": 18.65,
+            "overhead_ms": 232.13,
+            "total_tokens": 1234,
+            "effective_time_sec": 17.088,
+            "decode_efficiency": 0.339
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5271.0
+          },
+          "wall_clock_sec": 17.09,
+          "raw_response": "category=character | subject=Лойсо Пондохва | fact=Лойсо Пондохва был Великим Магистром Водяной Вороны. | time_scope=past\ncategory=character | subject=Нуфлин Мони Мах | fact=Нуфлин Мони Мах был Великим Магистром Семилистника. | time_scope=past\ncategory=history | subject=Война Орденов | fact=Орден Семилистника и Орден Потаённой Травы объединились против Ордена Водяной Вороны. | time_scope=past\ncategory=history | subject=Война Орденов | fact=Орден Семилистника и Орден Потаённой Травы объединились против Ордена Водяной Вороны. | time_scope=past\ncategory=character | subject=Лойсо Пондохва | fact=Лойсо Пондохва был самым могущественным магом той эпохи. | time_scope=past\ncategory=character | subject=Нуфлин Мони Мах | fact=Нуфлин Мони Мах сумел заключить союз с Кеттарийскими Охотниками. | time_scope=past\ncategory=event | subject=Война Орденов | fact=Кеттарийские Охотники решили исход войны. | time_scope=past"
+        },
+        {
+          "case_id": "dreams_05_dense_dialogue",
+          "quality": {
+            "hit_rate": 0.5,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 6,
+            "hits": [
+              false,
+              true
+            ],
+            "misses": [
+              "subject~'Обжора Бунба'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "character",
+                "subject": "Мелифаро",
+                "fact": "Мелифаро уставился на говорящего с притворным ужасом.",
+                "time_scope": "current"
+              },
+              {
+                "category": "character",
+                "subject": "Я",
+                "fact": "Я зевнул.",
+                "time_scope": "current"
+              },
+              {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Вы вышли из Дома у Моста.",
+                "time_scope": "current"
+              },
+              {
+                "category": "place",
+                "subject": "улица Медных Горшков",
+                "fact": "Вы направились по улице Медных Горшков.",
+                "time_scope": "current"
+              },
+              {
+                "category": "custom",
+                "subject": "Гуппарок",
+                "fact": "Сон содержал пастилу из Гуппарока.",
+                "time_scope": "past"
+              },
+              {
+                "category": "custom",
+                "subject": "Обжора Бунбу",
+                "fact": "Предложение было сделано в «Обжоре Бунбу».",
+                "time_scope": "current"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 10504830820,
+            "load_duration_ns": 230744808,
+            "prompt_eval_count": 894,
+            "prompt_eval_duration_ns": 178333220,
+            "prompt_eval_rate": 5013.09,
+            "eval_count": 193,
+            "eval_duration_ns": 9946158832,
+            "eval_rate": 19.4,
+            "overhead_ms": 149.59,
+            "total_tokens": 1087,
+            "effective_time_sec": 10.505,
+            "decode_efficiency": 0.353
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5223.0
+          },
+          "wall_clock_sec": 10.506,
+          "raw_response": "category=character | subject=Мелифаро | fact=Мелифаро уставился на говорящего с притворным ужасом. | time_scope=current\ncategory=character | subject=Я | fact=Я зевнул. | time_scope=current\ncategory=place | subject=Дом у Моста | fact=Вы вышли из Дома у Моста. | time_scope=current\ncategory=place | subject=улица Медных Горшков | fact=Вы направились по улице Медных Горшков. | time_scope=current\ncategory=custom | subject=Гуппарок | fact=Сон содержал пастилу из Гуппарока. | time_scope=past\ncategory=custom | subject=Обжора Бунбу | fact=Предложение было сделано в «Обжоре Бунбу». | time_scope=current"
+        },
+        {
+          "case_id": "dreams_06_landscape",
+          "quality": {
+            "hit_rate": 0.0,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 6,
+            "hits": [
+              false
+            ],
+            "misses": [
+              "subject~'Мохнатый Дом' fact~'башн'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "place",
+                "subject": "Ехо",
+                "fact": "Небо над Ехо имеет цвет, средний между перезревшим абрикосом и расплавленным золотом.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Башня",
+                "fact": "Рассказчик находился в башне на крыше Мохнатого Дома.",
+                "time_scope": "past"
+              },
+              {
+                "category": "place",
+                "subject": "Мохнатый Дом",
+                "fact": "Рассказчик находился на крыше Мохнатого Дома.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Улицы Ехо",
+                "fact": "На улицах Ехо зажигались первые фонари.",
+                "time_scope": "past"
+              },
+              {
+                "category": "place",
+                "subject": "Трактир",
+                "fact": "Кто-то громко смеялся в трактире на углу.",
+                "time_scope": "past"
+              },
+              {
+                "category": "custom",
+                "subject": "Запах",
+                "fact": "Откуда-то тянуло запахом свежей выпечки.",
+                "time_scope": "past"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 12029850178,
+            "load_duration_ns": 234219114,
+            "prompt_eval_count": 885,
+            "prompt_eval_duration_ns": 174802954,
+            "prompt_eval_rate": 5062.84,
+            "eval_count": 222,
+            "eval_duration_ns": 11457240423,
+            "eval_rate": 19.38,
+            "overhead_ms": 163.59,
+            "total_tokens": 1107,
+            "effective_time_sec": 12.03,
+            "decode_efficiency": 0.352
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5188.0
+          },
+          "wall_clock_sec": 12.031,
+          "raw_response": "category=place | subject=Ехо | fact=Небо над Ехо имеет цвет, средний между перезревшим абрикосом и расплавленным золотом. | time_scope=timeless\ncategory=place | subject=Башня | fact=Рассказчик находился в башне на крыше Мохнатого Дома. | time_scope=past\ncategory=place | subject=Мохнатый Дом | fact=Рассказчик находился на крыше Мохнатого Дома. | time_scope=timeless\ncategory=place | subject=Улицы Ехо | fact=На улицах Ехо зажигались первые фонари. | time_scope=past\ncategory=place | subject=Трактир | fact=Кто-то громко смеялся в трактире на углу. | time_scope=past\ncategory=custom | subject=Запах | fact=Откуда-то тянуло запахом свежей выпечки. | time_scope=past"
+        },
+        {
+          "case_id": "stranger_07_shurf",
+          "quality": {
+            "hit_rate": 0.7143,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 8,
+            "hits": [
+              true,
+              true,
+              true,
+              true,
+              true,
+              false,
+              false
+            ],
+            "misses": [
+              "subject~'Шурф Лонли-Локли' fact~'Хумгат'",
+              "subject~'Шурф Лонли-Локли' fact~'Хельн'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "character",
+                "subject": "Сэр Шурф Лонли-Локли",
+                "fact": "Сэр Шурф Лонли-Локли был Мастером Пресекающий Ненужные Жизни",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Сэр Шурф Лонли-Локли",
+                "fact": "Сэр Шурф Лонли-Локли носил Перчатки Смерти",
+                "time_scope": "past"
+              },
+              {
+                "category": "history",
+                "subject": "Сэр Шурф Лонли-Локли",
+                "fact": "Перчатки Смерти были изготовлены из рук убитых им магистров Ордена Ледяной Руки",
+                "time_scope": "past"
+              },
+              {
+                "category": "history",
+                "subject": "Сэр Шурф Лонли-Локли",
+                "fact": "Сэр Шурф Лонли-Локли был Мастером Рыбником в Ордене Дырявой Чаши",
+                "time_scope": "past"
+              },
+              {
+                "category": "history",
+                "subject": "Сэр Шурф Лонли-Локли",
+                "fact": "Сэр Шурф Лонли-Локли назывался Безумным Рыбником",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Сэр Джуффин Халли",
+                "fact": "Сэр Джуффин Халли спас Сэра Шурфа",
+                "time_scope": "past"
+              },
+              {
+                "category": "place",
+                "subject": "Хумгат",
+                "fact": "Сэр Шурф Лонли-Локли был отправлен в Хумгат",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Хельна",
+                "fact": "Сэр Шурф Лонли-Локли был женат на Хельне",
+                "time_scope": "past"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 18458332132,
+            "load_duration_ns": 224874027,
+            "prompt_eval_count": 930,
+            "prompt_eval_duration_ns": 177332204,
+            "prompt_eval_rate": 5244.39,
+            "eval_count": 352,
+            "eval_duration_ns": 17820161307,
+            "eval_rate": 19.75,
+            "overhead_ms": 235.96,
+            "total_tokens": 1282,
+            "effective_time_sec": 18.458,
+            "decode_efficiency": 0.359
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5265.0
+          },
+          "wall_clock_sec": 18.46,
+          "raw_response": "category=character | subject=Сэр Шурф Лонли-Локли | fact=Сэр Шурф Лонли-Локли был Мастером Пресекающий Ненужные Жизни | time_scope=past\ncategory=character | subject=Сэр Шурф Лонли-Локли | fact=Сэр Шурф Лонли-Локли носил Перчатки Смерти | time_scope=past\ncategory=history | subject=Сэр Шурф Лонли-Локли | fact=Перчатки Смерти были изготовлены из рук убитых им магистров Ордена Ледяной Руки | time_scope=past\ncategory=history | subject=Сэр Шурф Лонли-Локли | fact=Сэр Шурф Лонли-Локли был Мастером Рыбником в Ордене Дырявой Чаши | time_scope=past\ncategory=history | subject=Сэр Шурф Лонли-Локли | fact=Сэр Шурф Лонли-Локли назывался Безумным Рыбником | time_scope=past\ncategory=character | subject=Сэр Джуффин Халли | fact=Сэр Джуффин Халли спас Сэра Шурфа | time_scope=past\ncategory=place | subject=Хумгат | fact=Сэр Шурф Лонли-Локли был отправлен в Хумгат | time_scope=past\ncategory=character | subject=Хельна | fact=Сэр Шурф Лонли-Локли был женат на Хельне | time_scope=past"
+        },
+        {
+          "case_id": "master_winds_08_customs",
+          "quality": {
+            "hit_rate": 1.0,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 4,
+            "hits": [
+              true,
+              true,
+              true,
+              true
+            ],
+            "misses": [],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "custom",
+                "subject": "камра",
+                "fact": "Камра — горький горячий напиток, популярный в Ехо.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "custom",
+                "subject": "лоохи",
+                "fact": "Одежда в Ехо называется лоохи, что-то вроде длинной мантии.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "magic",
+                "subject": "амобилеры",
+                "fact": "Амобилеры — экипажи на магических кристаллах, используемые для передвижения.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "world_fact",
+                "subject": "Ехо",
+                "fact": "В Ехо нет электричества, телефонов и сигарет.",
+                "time_scope": "timeless"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 9258733394,
+            "load_duration_ns": 244570922,
+            "prompt_eval_count": 887,
+            "prompt_eval_duration_ns": 152973239,
+            "prompt_eval_rate": 5798.4,
+            "eval_count": 156,
+            "eval_duration_ns": 8738614108,
+            "eval_rate": 17.85,
+            "overhead_ms": 122.58,
+            "total_tokens": 1043,
+            "effective_time_sec": 9.259,
+            "decode_efficiency": 0.325
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5323.0
+          },
+          "wall_clock_sec": 9.26,
+          "raw_response": "category=custom | subject=камра | fact=Камра — горький горячий напиток, популярный в Ехо. | time_scope=timeless\ncategory=custom | subject=лоохи | fact=Одежда в Ехо называется лоохи, что-то вроде длинной мантии. | time_scope=timeless\ncategory=magic | subject=амобилеры | fact=Амобилеры — экипажи на магических кристаллах, используемые для передвижения. | time_scope=timeless\ncategory=world_fact | subject=Ехо | fact=В Ехо нет электричества, телефонов и сигарет. | time_scope=timeless"
+        }
+      ]
+    },
+    "qwen3:8b": {
+      "spec": {
+        "group": "A",
+        "params_total": "8B",
+        "params_active": "8B",
+        "vram_est_gb": 5.5,
+        "notes": "dense, secondary model"
+      },
+      "model_info": {
+        "model_name": "qwen3:8b",
+        "size_vram": 1817590272,
+        "size_total": 5969152512,
+        "offload_ratio": 0.30449720765988697,
+        "size_vram_mb": 1733.38916015625,
+        "size_total_mb": 5692.62744140625,
+        "quantization": "Q4_K_M",
+        "parameter_size": "8.2B",
+        "family": "qwen3"
+      },
+      "gpu_metrics": {
+        "vram_used_peak_mb": 5364.0,
+        "vram_used_avg_mb": 5151.1,
+        "vram_free_min_mb": 557.0,
+        "gpu_util_avg": 42.2,
+        "gpu_util_max": 99.0,
+        "mem_util_avg": 30.3,
+        "temp_avg_c": 72.8,
+        "temp_max_c": 79.0,
+        "power_avg_w": 37.1,
+        "power_max_w": 51.95,
+        "power_limit_w": null,
+        "gpu_clock_avg_mhz": 2649.0,
+        "vram_clock_avg_mhz": 8168.0,
+        "is_throttling": false,
+        "samples": 222
+      },
+      "cpu_metrics": {},
+      "bottleneck": "CPU_OFFLOAD",
+      "aggregate": {
+        "avg_hit_rate": 0.5423,
+        "avg_precision": 1.0,
+        "avg_time_sec": 53.19,
+        "format_reliability": 1.0,
+        "avg_eval_rate": 6.15,
+        "avg_prompt_eval_rate": 1248.45,
+        "avg_total_tokens": 1345.0,
+        "estimated_pipeline_hours": 56.7,
+        "estimated_pipeline_hours_ensemble": 73.8,
+        "quality_speed_score": 0.010195,
+        "quality_score": 0.542262,
+        "efficiency_score": 0.001901
+      },
+      "cases": [
+        {
+          "case_id": "stranger_01_juffin_intro",
+          "quality": {
+            "hit_rate": 0.5,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 4,
+            "hits": [
+              true,
+              false
+            ],
+            "misses": [
+              "subject~'Макс' fact~'камр'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "character",
+                "subject": "Джуффин",
+                "fact": "Джуффин является шефом Макса.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Макс",
+                "fact": "Макс является сотрудником Джуффина.",
+                "time_scope": "past"
+              },
+              {
+                "category": "event",
+                "subject": "Макс",
+                "fact": "Макс получает задание от Джуффина.",
+                "time_scope": "past"
+              },
+              {
+                "category": "custom",
+                "subject": "камра",
+                "fact": "Камра — напиток, который Макс не успевает допить.",
+                "time_scope": "past"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 21251061674,
+            "load_duration_ns": 115905789,
+            "prompt_eval_count": 986,
+            "prompt_eval_duration_ns": 1840547282,
+            "prompt_eval_rate": 535.71,
+            "eval_count": 122,
+            "eval_duration_ns": 19215674099,
+            "eval_rate": 6.35,
+            "overhead_ms": 78.93,
+            "total_tokens": 1108,
+            "effective_time_sec": 21.251,
+            "decode_efficiency": 0.115
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5250.0
+          },
+          "wall_clock_sec": 21.253,
+          "raw_response": "category=character | subject=Джуффин | fact=Джуффин является шефом Макса. | time_scope=past\ncategory=character | subject=Макс | fact=Макс является сотрудником Джуффина. | time_scope=past\ncategory=event | subject=Макс | fact=Макс получает задание от Джуффина. | time_scope=past\ncategory=custom | subject=камра | fact=Камра — напиток, который Макс не успевает допить. | time_scope=past"
+        },
+        {
+          "case_id": "stranger_02_house_bridge",
+          "quality": {
+            "hit_rate": 0.6,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 12,
+            "hits": [
+              true,
+              true,
+              false,
+              false,
+              true
+            ],
+            "misses": [
+              "subject~'Гуриг' fact~'подарил'",
+              "subject~'Орден Семилистника' fact~'резиденци'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Дом у Моста находится на левом берегу Хурона.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Дом у Моста имеет мрачноватый внешний вид.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Дом у Моста имеет башню с часами.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Дом у Моста имеет стрельчатые окна.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Дом у Моста имеет тяжёлые двери.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Дом у Моста имеет камины, которые горят.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Дом у Моста пахнет камрой.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Дом у Моста имеет кухню, где готовят вкусное.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "character",
+                "subject": "Джуффин",
+                "fact": "Джуффин живёт в Доме у Моста.",
+                "time_scope": "current"
+              },
+              {
+                "category": "history",
+                "subject": "Дом у Моста",
+                "fact": "Дом у Моста был резиденцией Ордена Семилистника.",
+                "time_scope": "past"
+              },
+              {
+                "category": "history",
+                "subject": "Дом у Моста",
+                "fact": "Дом у Моста стал штабом Малого Тайного Сыскного Войска с эпохи Гурига Восьмого.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Сэр Кофа Йох",
+                "fact": "Сэр Кофа Йох сидит за столом у окна в Доме у Моста.",
+                "time_scope": "current"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 90098673742,
+            "load_duration_ns": 113478653,
+            "prompt_eval_count": 1045,
+            "prompt_eval_duration_ns": 775033862,
+            "prompt_eval_rate": 1348.33,
+            "eval_count": 476,
+            "eval_duration_ns": 88852515822,
+            "eval_rate": 5.36,
+            "overhead_ms": 357.65,
+            "total_tokens": 1521,
+            "effective_time_sec": 90.099,
+            "decode_efficiency": 0.097
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5251.0
+          },
+          "wall_clock_sec": 90.102,
+          "raw_response": "category=place | subject=Дом у Моста | fact=Дом у Моста находится на левом берегу Хурона. | time_scope=timeless  \ncategory=place | subject=Дом у Моста | fact=Дом у Моста имеет мрачноватый внешний вид. | time_scope=timeless  \ncategory=place | subject=Дом у Моста | fact=Дом у Моста имеет башню с часами. | time_scope=timeless  \ncategory=place | subject=Дом у Моста | fact=Дом у Моста имеет стрельчатые окна. | time_scope=timeless  \ncategory=place | subject=Дом у Моста | fact=Дом у Моста имеет тяжёлые двери. | time_scope=timeless  \ncategory=place | subject=Дом у Моста | fact=Дом у Моста имеет камины, которые горят. | time_scope=timeless  \ncategory=place | subject=Дом у Моста | fact=Дом у Моста пахнет камрой. | time_scope=timeless  \ncategory=place | subject=Дом у Моста | fact=Дом у Моста имеет кухню, где готовят вкусное. | time_scope=timeless  \ncategory=character | subject=Джуффин | fact=Джуффин живёт в Доме у Моста. | time_scope=current  \ncategory=history | subject=Дом у Моста | fact=Дом у Моста был резиденцией Ордена Семилистника. | time_scope=past  \ncategory=history | subject=Дом у Моста | fact=Дом у Моста стал штабом Малого Тайного Сыскного Войска с эпохи Гурига Восьмого. | time_scope=past  \ncategory=character | subject=Сэр Кофа Йох | fact=Сэр Кофа Йох сидит за столом у окна в Доме у Моста. | time_scope=current"
+        },
+        {
+          "case_id": "master_winds_03_magic",
+          "quality": {
+            "hit_rate": 0.5,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 8,
+            "hits": [
+              true,
+              false,
+              true,
+              false,
+              false,
+              true
+            ],
+            "misses": [
+              "subject~'Кодекс Хрембера' fact~'ступен'",
+              "subject~'Холоми' fact~'колдовать'",
+              "subject~'Безмолвная речь' fact~'общени'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "custom",
+                "subject": "Безмолвная речь",
+                "fact": "Безмолвная речь является одной из базовых способностей.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "magic",
+                "subject": "Очевидная магия",
+                "fact": "Очевидная магия подлежала ограничениям согласно Кодексу Хрембера.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Холоми",
+                "fact": "Холоми — тюрьма-крепость, где содержатся опасные преступники.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "history",
+                "subject": "Эпоха Орденов",
+                "fact": "Эпоха Орденов является историческим периодом, когда была построена Холоми.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "custom",
+                "subject": "Кодекс Хрембера",
+                "fact": "Кодекс Хрембера устанавливал ограничения на использование Очевидной магии.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "custom",
+                "subject": "Кодекс Хрембера",
+                "fact": "Кодекс Хрембера фактически отменён.",
+                "time_scope": "current"
+              },
+              {
+                "category": "character",
+                "subject": "Шурф",
+                "fact": "Шурф объяснял Кодекс Хрембера.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Шурф",
+                "fact": "Шурф добавил информацию о Безмолвной речи.",
+                "time_scope": "past"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 56841234295,
+            "load_duration_ns": 120746576,
+            "prompt_eval_count": 1050,
+            "prompt_eval_duration_ns": 935757825,
+            "prompt_eval_rate": 1122.09,
+            "eval_count": 324,
+            "eval_duration_ns": 55530162296,
+            "eval_rate": 5.83,
+            "overhead_ms": 254.57,
+            "total_tokens": 1374,
+            "effective_time_sec": 56.841,
+            "decode_efficiency": 0.106
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5114.0
+          },
+          "wall_clock_sec": 56.845,
+          "raw_response": "category=custom | subject=Безмолвная речь | fact=Безмолвная речь является одной из базовых способностей. | time_scope=timeless  \ncategory=magic | subject=Очевидная магия | fact=Очевидная магия подлежала ограничениям согласно Кодексу Хрембера. | time_scope=timeless  \ncategory=place | subject=Холоми | fact=Холоми — тюрьма-крепость, где содержатся опасные преступники. | time_scope=timeless  \ncategory=history | subject=Эпоха Орденов | fact=Эпоха Орденов является историческим периодом, когда была построена Холоми. | time_scope=timeless  \ncategory=custom | subject=Кодекс Хрембера | fact=Кодекс Хрембера устанавливал ограничения на использование Очевидной магии. | time_scope=timeless  \ncategory=custom | subject=Кодекс Хрембера | fact=Кодекс Хрембера фактически отменён. | time_scope=current  \ncategory=character | subject=Шурф | fact=Шурф объяснял Кодекс Хрембера. | time_scope=past  \ncategory=character | subject=Шурф | fact=Шурф добавил информацию о Безмолвной речи. | time_scope=past"
+        },
+        {
+          "case_id": "dark_side_04_flashback",
+          "quality": {
+            "hit_rate": 0.6667,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 9,
+            "hits": [
+              true,
+              true,
+              false,
+              true,
+              false,
+              true
+            ],
+            "misses": [
+              "subject~'Лойсо Пондохва' fact~'могущественн'",
+              "subject~'Нуфлин Мони Мах' fact~'Кеттарийски'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "character",
+                "subject": "Сэр Манга Мелифаро",
+                "fact": "Сэр Манга Мелифаро рассказывал о Смутных Временах.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Лойсо Пондохва",
+                "fact": "Лойсо Пондохва был Великим Магистром Ордена Водяной Вороны.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Нуфлин Мони Мах",
+                "fact": "Нуфлин Мони Мах был Великим Магистром Ордена Семилистника.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Кеттарийские Охотники",
+                "fact": "Кеттарийские Охотники заключили союз с Орденом Семилистника.",
+                "time_scope": "unclear"
+              },
+              {
+                "category": "event",
+                "subject": "Смутные Времена",
+                "fact": "Смутные Времена были эпохой войны между Орденами.",
+                "time_scope": "past"
+              },
+              {
+                "category": "place",
+                "subject": "Орден Семилистника",
+                "fact": "Орден Семилистника объединился с Орденом Потаённой Травы.",
+                "time_scope": "past"
+              },
+              {
+                "category": "place",
+                "subject": "Орден Потаённой Травы",
+                "fact": "Орден Потаённой Травы объединился с Орденом Семилистника.",
+                "time_scope": "past"
+              },
+              {
+                "category": "place",
+                "subject": "Орден Водяной Вороны",
+                "fact": "Орден Водяной Вороны воевал с другими Орденами.",
+                "time_scope": "past"
+              },
+              {
+                "category": "custom",
+                "subject": "камра",
+                "fact": "камра — напиток, который пили во время ужина.",
+                "time_scope": "timeless"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 67750485285,
+            "load_duration_ns": 116679284,
+            "prompt_eval_count": 1061,
+            "prompt_eval_duration_ns": 774040021,
+            "prompt_eval_rate": 1370.73,
+            "eval_count": 418,
+            "eval_duration_ns": 66526260671,
+            "eval_rate": 6.28,
+            "overhead_ms": 333.51,
+            "total_tokens": 1479,
+            "effective_time_sec": 67.75,
+            "decode_efficiency": 0.114
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5204.0
+          },
+          "wall_clock_sec": 67.752,
+          "raw_response": "category=character | subject=Сэр Манга Мелифаро | fact=Сэр Манга Мелифаро рассказывал о Смутных Временах. | time_scope=past\ncategory=character | subject=Лойсо Пондохва | fact=Лойсо Пондохва был Великим Магистром Ордена Водяной Вороны. | time_scope=past\ncategory=character | subject=Нуфлин Мони Мах | fact=Нуфлин Мони Мах был Великим Магистром Ордена Семилистника. | time_scope=past\ncategory=character | subject=Кеттарийские Охотники | fact=Кеттарийские Охотники заключили союз с Орденом Семилистника. | time,scope=past\ncategory=event | subject=Смутные Времена | fact=Смутные Времена были эпохой войны между Орденами. | time_scope=past\ncategory=place | subject=Орден Семилистника | fact=Орден Семилистника объединился с Орденом Потаённой Травы. | time_scope=past\ncategory=place | subject=Орден Потаённой Травы | fact=Орден Потаённой Травы объединился с Орденом Семилистника. | time_scope=past\ncategory=place | subject=Орден Водяной Вороны | fact=Орден Водяной Вороны воевал с другими Орденами. | time_scope=past\ncategory=custom | subject=камра | fact=камра — напиток, который пили во время ужина. | time_scope=timeless"
+        },
+        {
+          "case_id": "dreams_05_dense_dialogue",
+          "quality": {
+            "hit_rate": 0.5,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 6,
+            "hits": [
+              false,
+              true
+            ],
+            "misses": [
+              "subject~'Обжора Бунба'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "character",
+                "subject": "Мелифаро",
+                "fact": "Мелифаро выражает беспокойство по поводу того, что Макс не спал.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Макс",
+                "fact": "Макс рассказывает Мелифаро о сне, в котором он видел пастилу из Гуппарока.",
+                "time_scope": "past"
+              },
+              {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Дом у Моста является местом, где находится Макс и Мелифаро.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "улица Медных Горшков",
+                "fact": "улица Медных Горшков является маршрутом, по которому идут Макс и Мелифаро.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "custom",
+                "subject": "пастила из Гуппарока",
+                "fact": "пастила из Гуппарока является предметом, который Макс видел во сне.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "custom",
+                "subject": "Обжора Бунбу",
+                "fact": "Обжора Бунбу является местом, куда идут Макс и Мелифаро.",
+                "time_scope": "timeless"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 44178347732,
+            "load_duration_ns": 128583920,
+            "prompt_eval_count": 1011,
+            "prompt_eval_duration_ns": 763870306,
+            "prompt_eval_rate": 1323.52,
+            "eval_count": 269,
+            "eval_duration_ns": 43081437368,
+            "eval_rate": 6.24,
+            "overhead_ms": 204.46,
+            "total_tokens": 1280,
+            "effective_time_sec": 44.178,
+            "decode_efficiency": 0.114
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5151.0
+          },
+          "wall_clock_sec": 44.18,
+          "raw_response": "category=character | subject=Мелифаро | fact=Мелифаро выражает беспокойство по поводу того, что Макс не спал. | time_scope=past\ncategory=character | subject=Макс | fact=Макс рассказывает Мелифаро о сне, в котором он видел пастилу из Гуппарока. | time_scope=past\ncategory=place | subject=Дом у Моста | fact=Дом у Моста является местом, где находится Макс и Мелифаро. | time_scope=timeless\ncategory=place | subject=улица Медных Горшков | fact=улица Медных Горшков является маршрутом, по которому идут Макс и Мелифаро. | time_scope=timeless\ncategory=custom | subject=пастила из Гуппарока | fact=пастила из Гуппарока является предметом, который Макс видел во сне. | time_scope=timeless\ncategory=custom | subject=Обжора Бунбу | fact=Обжора Бунбу является местом, куда идут Макс и Мелифаро. | time_scope=timeless"
+        },
+        {
+          "case_id": "dreams_06_landscape",
+          "quality": {
+            "hit_rate": 0.0,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 8,
+            "hits": [
+              false
+            ],
+            "misses": [
+              "subject~'Мохнатый Дом' fact~'башн'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "place",
+                "subject": "Мохнатый Дом",
+                "fact": "Мохнатый Дом имеет крышу, с которой видно на закаты Ехо.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Ехо",
+                "fact": "Ехо имеет небо, окрашенное в цвета перезревшего абрикоса и расплавленного золота.",
+                "time_scope": "unclear"
+              },
+              {
+                "category": "place",
+                "subject": "Ехо",
+                "fact": "Ехо имеет фонари, которые зажигаются на улицах в вечернее время.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Ехо",
+                "fact": "Ехо имеет трактиры, где люди громко смеются.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Ехо",
+                "fact": "Ехо имеет запахи свежей выпечки, которые распространяются по улицам.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "character",
+                "subject": "Я",
+                "fact": "Я сидел на крыше Мохнатого Дома и наблюдал за закатом.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Я",
+                "fact": "Я чувствовал глубокое чувство счастья, находясь в Ехо.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Я",
+                "fact": "Я осознавал, что мое присутствие в Ехо было обосновано.",
+                "time_scope": "past"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 53352936807,
+            "load_duration_ns": 102610115,
+            "prompt_eval_count": 1006,
+            "prompt_eval_duration_ns": 713305198,
+            "prompt_eval_rate": 1410.34,
+            "eval_count": 318,
+            "eval_duration_ns": 52284302382,
+            "eval_rate": 6.08,
+            "overhead_ms": 252.72,
+            "total_tokens": 1324,
+            "effective_time_sec": 53.353,
+            "decode_efficiency": 0.111
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5103.0
+          },
+          "wall_clock_sec": 53.355,
+          "raw_response": "category=place | subject=Мохнатый Дом | fact=Мохнатый Дом имеет крышу, с которой видно на закаты Ехо. | time_scope=timeless\ncategory=place | subject=Ехо | fact=Ехо имеет небо, окрашенное в цвета перезревшего абрикоса и расплавленного золота. | time,scope=timeless\ncategory=place | subject=Ехо | fact=Ехо имеет фонари, которые зажигаются на улицах в вечернее время. | time_scope=timeless\ncategory=place | subject=Ехо | fact=Ехо имеет трактиры, где люди громко смеются. | time_scope=timeless\ncategory=place | subject=Ехо | fact=Ехо имеет запахи свежей выпечки, которые распространяются по улицам. | time_scope=timeless\ncategory=character | subject=Я | fact=Я сидел на крыше Мохнатого Дома и наблюдал за закатом. | time_scope=past\ncategory=character | subject=Я | fact=Я чувствовал глубокое чувство счастья, находясь в Ехо. | time_scope=past\ncategory=character | subject=Я | fact=Я осознавал, что мое присутствие в Ехо было обосновано. | time_scope=past"
+        },
+        {
+          "case_id": "stranger_07_shurf",
+          "quality": {
+            "hit_rate": 0.5714,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 7,
+            "hits": [
+              false,
+              true,
+              false,
+              true,
+              true,
+              false,
+              true
+            ],
+            "misses": [
+              "subject~'Шурф Лонли-Локли' fact~'Пресекающий'",
+              "subject~'Шурф Лонли-Локли' fact~'Ледяной Руки'",
+              "subject~'Шурф Лонли-Локли' fact~'Хумгат'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "character",
+                "subject": "Сэр Шурф Лонли-Локли",
+                "fact": "Сэр Шурф Лонли-Локли был Мастером Пресекающего Ненужные Жизни.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Сэр Шурф Лонли-Локли",
+                "fact": "Сэр Шурф Лонли-Локли носил Перчатки Смерти.",
+                "time_scope": "unclear"
+              },
+              {
+                "category": "character",
+                "subject": "Сэр Шурф Лонли-Локли",
+                "fact": "Сэр Шурф Лонли-Локли был Мастером Рыбником в Ордене Дырявой Чаши.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Сэр Шурф Лонли-Локли",
+                "fact": "Сэр Шурф Лонли-Локли был известен как Безумный Рыбник.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Сэр Шурф Лонли-Локли",
+                "fact": "Сэр Шурф Лонли-Локли был женат на Хельне, поэтессе.",
+                "time_scope": "past"
+              },
+              {
+                "category": "event",
+                "subject": "Сэр Шурф Лонли-Локли",
+                "fact": "Сэр Джуффин Халли спас Сэра Шурфа Лонли-Локли.",
+                "time_scope": "past"
+              },
+              {
+                "category": "place",
+                "subject": "Хумгат",
+                "fact": "Сэр Шурф Лонли-Локли был отправлен в Хумгат.",
+                "time_scope": "past"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 56749558720,
+            "load_duration_ns": 99866717,
+            "prompt_eval_count": 1068,
+            "prompt_eval_duration_ns": 774353865,
+            "prompt_eval_rate": 1379.21,
+            "eval_count": 358,
+            "eval_duration_ns": 55577885065,
+            "eval_rate": 6.44,
+            "overhead_ms": 297.45,
+            "total_tokens": 1426,
+            "effective_time_sec": 56.75,
+            "decode_efficiency": 0.117
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5095.0
+          },
+          "wall_clock_sec": 56.751,
+          "raw_response": "category=character | subject=Сэр Шурф Лонли-Локли | fact=Сэр Шурф Лонли-Локли был Мастером Пресекающего Ненужные Жизни. | time_scope=past\ncategory=character | subject=Сэр Шурф Лонли-Локли | fact=Сэр Шурф Лонли-Локли носил Перчатки Смерти. | time\ncategory=character | subject=Сэр Шурф Лонли-Локли | fact=Сэр Шурф Лонли-Локли был Мастером Рыбником в Ордене Дырявой Чаши. | time_scope=past\ncategory=character | subject=Сэр Шурф Лонли-Локли | fact=Сэр Шурф Лонли-Локли был известен как Безумный Рыбник. | time_scope=past\ncategory=character | subject=Сэр Шурф Лонли-Локли | fact=Сэр Шурф Лонли-Локли был женат на Хельне, поэтессе. | time_scope=past\ncategory=event | subject=Сэр Шурф Лонли-Локли | fact=Сэр Джуффин Халли спас Сэра Шурфа Лонли-Локли. | time_scope=past\ncategory=place | subject=Хумгат | fact=Сэр Шурф Лонли-Локли был отправлен в Хумгат. | time_scope=past"
+        },
+        {
+          "case_id": "master_winds_08_customs",
+          "quality": {
+            "hit_rate": 1.0,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 6,
+            "hits": [
+              true,
+              true,
+              true,
+              true
+            ],
+            "misses": [],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "custom",
+                "subject": "камра",
+                "fact": "Камра — горький горячий напиток, который пьют все и помногу.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "custom",
+                "subject": "лоохи",
+                "fact": "Лоохи — одежда, которая называется здесь мантией.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Ехо",
+                "fact": "В Ехо нет кофе, электричества, телефонов и сигарет.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "magic",
+                "subject": "амобилеры",
+                "fact": "Амобилеры — экипажи на магических кристаллах.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "character",
+                "subject": "Мелифаро",
+                "fact": "Мелифаро меняет лоохи по несколько штук в день.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "character",
+                "subject": "Макс",
+                "fact": "Макс вождёт амобилер как бешеный.",
+                "time_scope": "past"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 35277923682,
+            "load_duration_ns": 96688445,
+            "prompt_eval_count": 1017,
+            "prompt_eval_duration_ns": 679064587,
+            "prompt_eval_rate": 1497.65,
+            "eval_count": 228,
+            "eval_duration_ns": 34341054156,
+            "eval_rate": 6.64,
+            "overhead_ms": 161.12,
+            "total_tokens": 1245,
+            "effective_time_sec": 35.278,
+            "decode_efficiency": 0.121
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5084.0
+          },
+          "wall_clock_sec": 35.28,
+          "raw_response": "category=custom | subject=камра | fact=Камра — горький горячий напиток, который пьют все и помногу. | time_scope=timeless\ncategory=custom | subject=лоохи | fact=Лоохи — одежда, которая называется здесь мантией. | time_scope=timeless\ncategory=place | subject=Ехо | fact=В Ехо нет кофе, электричества, телефонов и сигарет. | time_scope=timeless\ncategory=magic | subject=амобилеры | fact=Амобилеры — экипажи на магических кристаллах. | time_scope=timeless\ncategory=character | subject=Мелифаро | fact=Мелифаро меняет лоохи по несколько штук в день. | time_scope=timeless\ncategory=character | subject=Макс | fact=Макс вождёт амобилер как бешеный. | time_scope=past"
+        }
+      ]
+    },
+    "llama3.1:8b": {
+      "spec": {
+        "group": "A",
+        "params_total": "8B",
+        "params_active": "8B",
+        "vram_est_gb": 5.5,
+        "notes": "classic stable"
+      },
+      "model_info": {
+        "model_name": "llama3.1:8b",
+        "size_vram": 2063147008,
+        "size_total": 5864652800,
+        "offload_ratio": 0.3517935465847185,
+        "size_vram_mb": 1967.5703125,
+        "size_total_mb": 5592.96875,
+        "quantization": "Q4_K_M",
+        "parameter_size": "8.0B",
+        "family": "llama"
+      },
+      "gpu_metrics": {
+        "vram_used_peak_mb": 5218.0,
+        "vram_used_avg_mb": 5097.8,
+        "vram_free_min_mb": 703.0,
+        "gpu_util_avg": 38.2,
+        "gpu_util_max": 88.0,
+        "mem_util_avg": 28.4,
+        "temp_avg_c": 73.2,
+        "temp_max_c": 76.0,
+        "power_avg_w": 36.5,
+        "power_max_w": 75.71,
+        "power_limit_w": null,
+        "gpu_clock_avg_mhz": 2666.0,
+        "vram_clock_avg_mhz": 8201.0,
+        "is_throttling": false,
+        "samples": 137
+      },
+      "cpu_metrics": {},
+      "bottleneck": "CPU_OFFLOAD",
+      "aggregate": {
+        "avg_hit_rate": 0.4161,
+        "avg_precision": 0.9542,
+        "avg_time_sec": 32.253,
+        "format_reliability": 1.0,
+        "avg_eval_rate": 7.45,
+        "avg_prompt_eval_rate": 1395.15,
+        "avg_total_tokens": 1204.0,
+        "estimated_pipeline_hours": 34.4,
+        "estimated_pipeline_hours_ensemble": 44.7,
+        "quality_speed_score": 0.012309,
+        "quality_score": 0.397001,
+        "efficiency_score": 0.002359
+      },
+      "cases": [
+        {
+          "case_id": "stranger_01_juffin_intro",
+          "quality": {
+            "hit_rate": 0.0,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 3,
+            "hits": [
+              false,
+              false
+            ],
+            "misses": [
+              "subject~'Джуффин' fact~'шеф'",
+              "subject~'Макс' fact~'камр'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "character",
+                "subject": "Макс",
+                "fact": "Макс работает дворецким для Джуффина.",
+                "time_scope": "current"
+              },
+              {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Дом у Моста является штаб-квартирой Тайного Сыска.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "magic",
+                "subject": "камра",
+                "fact": "Камра — горький горячий напиток, популярный в Ехо.",
+                "time_scope": "timeless"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 16871256864,
+            "load_duration_ns": 127643611,
+            "prompt_eval_count": 931,
+            "prompt_eval_duration_ns": 1790994627,
+            "prompt_eval_rate": 519.82,
+            "eval_count": 105,
+            "eval_duration_ns": 14826596660,
+            "eval_rate": 7.08,
+            "overhead_ms": 126.02,
+            "total_tokens": 1036,
+            "effective_time_sec": 16.871,
+            "decode_efficiency": 0.129
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5124.0
+          },
+          "wall_clock_sec": 16.873,
+          "raw_response": "category=character | subject=Макс | fact=Макс работает дворецким для Джуффина. | time_scope=current\ncategory=place | subject=Дом у Моста | fact=Дом у Моста является штаб-квартирой Тайного Сыска. | time_scope=timeless\ncategory=magic | subject=камра | fact=Камра — горький горячий напиток, популярный в Ехо. | time_scope=timeless"
+        },
+        {
+          "case_id": "stranger_02_house_bridge",
+          "quality": {
+            "hit_rate": 0.4,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 6,
+            "hits": [
+              false,
+              true,
+              false,
+              true,
+              false
+            ],
+            "misses": [
+              "subject~'Дом у Моста' fact~'Тайн'",
+              "subject~'Гуриг' fact~'подарил'",
+              "subject~'Кофа Йох'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Дом у Моста находится на левом берегу Хурона.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "organization",
+                "subject": "Малое Тайное Сыскное Войско",
+                "fact": "Малое Тайное Сыскное Войско базируется в Доме у Моста.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "character",
+                "subject": "Джуффин",
+                "fact": "Джуффин является лидером Малого Тайного Сыска.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "custom",
+                "subject": "камра",
+                "fact": "Камра — горький горячий напиток, популярный в Ехо.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "В Доме у Моста есть камины, которые горят.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "organization",
+                "subject": "Орден Семилистника",
+                "fact": "Раньше в Доме у Моста была резиденция Ордена Семилистника.",
+                "time_scope": "past"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 33859051357,
+            "load_duration_ns": 113060949,
+            "prompt_eval_count": 978,
+            "prompt_eval_duration_ns": 626123802,
+            "prompt_eval_rate": 1561.99,
+            "eval_count": 247,
+            "eval_duration_ns": 32831307568,
+            "eval_rate": 7.52,
+            "overhead_ms": 288.56,
+            "total_tokens": 1225,
+            "effective_time_sec": 33.859,
+            "decode_efficiency": 0.137
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5142.0
+          },
+          "wall_clock_sec": 33.86,
+          "raw_response": "category=place | subject=Дом у Моста | fact=Дом у Моста находится на левом берегу Хурона. | time_scope=timeless\ncategory=organization | subject=Малое Тайное Сыскное Войско | fact=Малое Тайное Сыскное Войско базируется в Доме у Моста. | time_scope=timeless\ncategory=character | subject=Джуффин | fact=Джуффин является лидером Малого Тайного Сыска. | time_scope=timeless\ncategory=custom | subject=камра | fact=Камра — горький горячий напиток, популярный в Ехо. | time_scope=timeless\ncategory=place | subject=Дом у Моста | fact=В Доме у Моста есть камины, которые горят. | time_scope=timeless\ncategory=organization | subject=Орден Семилистника | fact=Раньше в Доме у Моста была резиденция Ордена Семилистника. | time_scope=past"
+        },
+        {
+          "case_id": "master_winds_03_magic",
+          "quality": {
+            "hit_rate": 0.6667,
+            "precision": 0.8,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 5,
+            "hits": [
+              true,
+              false,
+              true,
+              true,
+              true,
+              false
+            ],
+            "misses": [
+              "subject~'Кодекс Хрембера' fact~'ступен'",
+              "subject~'Кодекс Хрембера' fact~'отменён'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "custom",
+                "subject": "Кодекс Хрембера",
+                "fact": "Кодекс Хрембера устанавливал ограничения на использование Очевидной магии.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "magic",
+                "subject": "Очевидная магия",
+                "fact": "Очевидная магия имеет тридцать четыре ступени.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "event",
+                "subject": "Отмена Кодекса Хрембера",
+                "fact": "Кодекс Хрембера фактически отменён.",
+                "time_scope": "past"
+              },
+              {
+                "category": "place",
+                "subject": "Холоми",
+                "fact": "Холоми — тюрьма-крепость, в которой невозможно колдовать.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "magic",
+                "subject": "Безмолвная речь",
+                "fact": "Безмолвная речь является способностью мысленного общения на расстоянии.",
+                "time_scope": "timeless"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 27637442163,
+            "load_duration_ns": 110515684,
+            "prompt_eval_count": 985,
+            "prompt_eval_duration_ns": 649443990,
+            "prompt_eval_rate": 1516.68,
+            "eval_count": 200,
+            "eval_duration_ns": 26654096358,
+            "eval_rate": 7.5,
+            "overhead_ms": 223.39,
+            "total_tokens": 1185,
+            "effective_time_sec": 27.637,
+            "decode_efficiency": 0.136
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5151.0
+          },
+          "wall_clock_sec": 27.639,
+          "raw_response": "category=custom | subject=Кодекс Хрембера | fact=Кодекс Хрембера устанавливал ограничения на использование Очевидной магии. | time_scope=timeless\ncategory=magic | subject=Очевидная магия | fact=Очевидная магия имеет тридцать четыре ступени. | time_scope=timeless\ncategory=event | subject=Отмена Кодекса Хрембера | fact=Кодекс Хрембера фактически отменён. | time_scope=past\ncategory=place | subject=Холоми | fact=Холоми — тюрьма-крепость, в которой невозможно колдовать. | time_scope=timeless\ncategory=magic | subject=Безмолвная речь | fact=Безмолвная речь является способностью мысленного общения на расстоянии. | time_scope=timeless"
+        },
+        {
+          "case_id": "dark_side_04_flashback",
+          "quality": {
+            "hit_rate": 0.8333,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 6,
+            "hits": [
+              true,
+              true,
+              true,
+              true,
+              false,
+              true
+            ],
+            "misses": [
+              "subject~'Нуфлин Мони Мах' fact~'Кеттарийски'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "character",
+                "subject": "Сэр Манга Мелифаро",
+                "fact": "Сэр Манга Мелифаро не путать с его коллегой Мелифаро.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "history",
+                "subject": "Смутные Времена",
+                "fact": "В те годы Ордена воевали друг с другом.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Лойсо Пондохва",
+                "fact": "Лойсо Пондохва был Великим Магистром Водяной Вороны и одним из самых могущественных магов той эпохи.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "character",
+                "subject": "Нуфлин Мони Мах",
+                "fact": "Нуфлин Мони Мах, Великий Магистр Семилистника, был хитрее, чем Лойсо Пондохва.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "event",
+                "subject": "Смутные Времена",
+                "fact": "Орден Семилистника и Орден Потаённой Травы объединились против Ордена Водяной Вороны.",
+                "time_scope": "past"
+              },
+              {
+                "category": "magic",
+                "subject": "магия",
+                "fact": "Лойсо Пондохва был одним из самых могущественных магов той эпохи.",
+                "time_scope": "timeless"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 40617114515,
+            "load_duration_ns": 106398134,
+            "prompt_eval_count": 997,
+            "prompt_eval_duration_ns": 638338349,
+            "prompt_eval_rate": 1561.87,
+            "eval_count": 293,
+            "eval_duration_ns": 39550997704,
+            "eval_rate": 7.41,
+            "overhead_ms": 321.38,
+            "total_tokens": 1290,
+            "effective_time_sec": 40.617,
+            "decode_efficiency": 0.135
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5141.0
+          },
+          "wall_clock_sec": 40.618,
+          "raw_response": "category=character | subject=Сэр Манга Мелифаро | fact=Сэр Манга Мелифаро не путать с его коллегой Мелифаро. | time_scope=timeless\ncategory=history | subject=Смутные Времена | fact=В те годы Ордена воевали друг с другом. | time_scope=past\ncategory=character | subject=Лойсо Пондохва | fact=Лойсо Пондохва был Великим Магистром Водяной Вороны и одним из самых могущественных магов той эпохи. | time_scope=timeless\ncategory=character | subject=Нуфлин Мони Мах | fact=Нуфлин Мони Мах, Великий Магистр Семилистника, был хитрее, чем Лойсо Пондохва. | time_scope=timeless\ncategory=event | subject=Смутные Времена | fact=Орден Семилистника и Орден Потаённой Травы объединились против Ордена Водяной Вороны. | time_scope=past\ncategory=magic | subject=магия | fact=Лойсо Пондохва был одним из самых могущественных магов той эпохи. | time_scope=timeless"
+        },
+        {
+          "case_id": "dreams_05_dense_dialogue",
+          "quality": {
+            "hit_rate": 0.5,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 4,
+            "hits": [
+              false,
+              true
+            ],
+            "misses": [
+              "subject~'Обжора Бунба'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Дом у Моста является местом жительства персонажей.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "custom",
+                "subject": "Гуппарок",
+                "fact": "Гуппарок — вид фруктов, используемых в приготовлении еды в Ехо.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "event",
+                "subject": "Побывка в «Обжоре Бунбу»",
+                "fact": "Персонажи посещают «Обжору Бунбу» для приема пищи.",
+                "time_scope": "current"
+              },
+              {
+                "category": "place",
+                "subject": "улица Медных Горшков",
+                "fact": "Улица Медных Горшков является местом, где персонажи могут передвигаться.",
+                "time_scope": "timeless"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 23543887017,
+            "load_duration_ns": 110125304,
+            "prompt_eval_count": 958,
+            "prompt_eval_duration_ns": 653915690,
+            "prompt_eval_rate": 1465.02,
+            "eval_count": 171,
+            "eval_duration_ns": 22584657898,
+            "eval_rate": 7.57,
+            "overhead_ms": 195.19,
+            "total_tokens": 1129,
+            "effective_time_sec": 23.544,
+            "decode_efficiency": 0.138
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5121.0
+          },
+          "wall_clock_sec": 23.545,
+          "raw_response": "category=place | subject=Дом у Моста | fact=Дом у Моста является местом жительства персонажей. | time_scope=timeless\ncategory=custom | subject=Гуппарок | fact=Гуппарок — вид фруктов, используемых в приготовлении еды в Ехо. | time_scope=timeless\ncategory=event | subject=Побывка в «Обжоре Бунбу» | fact=Персонажи посещают «Обжору Бунбу» для приема пищи. | time_scope=current\ncategory=place | subject=улица Медных Горшков | fact=Улица Медных Горшков является местом, где персонажи могут передвигаться. | time_scope=timeless"
+        },
+        {
+          "case_id": "dreams_06_landscape",
+          "quality": {
+            "hit_rate": 0.0,
+            "precision": 0.8333,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 6,
+            "hits": [
+              false
+            ],
+            "misses": [
+              "subject~'Мохнатый Дом' fact~'башн'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "character",
+                "subject": "автор",
+                "fact": "автор сидел в своей башне на крыше Мохнатого Дома.",
+                "time_scope": "past"
+              },
+              {
+                "category": "place",
+                "subject": "Мохнатый Дом",
+                "fact": "Мохнатый Дом находится на вершине холма.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "custom",
+                "subject": "закаты в Ехо",
+                "fact": "закаты в Ехо невозможного цвета.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "улицы Ехо",
+                "fact": "на улицах Ехо зажигаются фонари вечером.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "custom",
+                "subject": "трактир на углу",
+                "fact": "в трактире на углу кто-то громко смеется.",
+                "time_scope": "past"
+              },
+              {
+                "category": "custom",
+                "subject": "фрешвая выпечка",
+                "fact": "откуда-то тянуло запахом свежей выпечки.",
+                "time_scope": "past"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 28752258996,
+            "load_duration_ns": 107694901,
+            "prompt_eval_count": 952,
+            "prompt_eval_duration_ns": 615295137,
+            "prompt_eval_rate": 1547.22,
+            "eval_count": 213,
+            "eval_duration_ns": 27797975968,
+            "eval_rate": 7.66,
+            "overhead_ms": 231.29,
+            "total_tokens": 1165,
+            "effective_time_sec": 28.752,
+            "decode_efficiency": 0.139
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5114.0
+          },
+          "wall_clock_sec": 28.753,
+          "raw_response": "category=character | subject=автор | fact=автор сидел в своей башне на крыше Мохнатого Дома. | time_scope=past\ncategory=place | subject=Мохнатый Дом | fact=Мохнатый Дом находится на вершине холма. | time_scope=timeless\ncategory=custom | subject=закаты в Ехо | fact=закаты в Ехо невозможного цвета. | time_scope=timeless\ncategory=place | subject=улицы Ехо | fact=на улицах Ехо зажигаются фонари вечером. | time_scope=timeless\ncategory=custom | subject=трактир на углу | fact=в трактире на углу кто-то громко смеется. | time_scope=past\ncategory=custom | subject=фрешвая выпечка | fact=откуда-то тянуло запахом свежей выпечки. | time_scope=past"
+        },
+        {
+          "case_id": "stranger_07_shurf",
+          "quality": {
+            "hit_rate": 0.4286,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 8,
+            "hits": [
+              false,
+              true,
+              false,
+              true,
+              true,
+              false,
+              false
+            ],
+            "misses": [
+              "subject~'Шурф Лонли-Локли' fact~'Пресекающий'",
+              "subject~'Шурф Лонли-Локли' fact~'Ледяной Руки'",
+              "subject~'Шурф Лонли-Локли' fact~'Хумгат'",
+              "subject~'Шурф Лонли-Локли' fact~'Хельн'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "character",
+                "subject": "Сэр Шурф Лонли-Локли",
+                "fact": "Сэр Шурф Лонли-Локли был Мастером Рыбником в Ордене Дырявой Чаши.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Сэр Шурф Лонли-Локли",
+                "fact": "Сэр Шурф Лонли-Локли носил Перчатки Смерти.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "character",
+                "subject": "Сэр Джуффин Халли",
+                "fact": "Сэр Джуффин Халли спас Сэра Шурфа Лонли-Локли от безумия.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Хельна",
+                "fact": "Хельна была женой Сэра Шурфа Лонли-Локли.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Орден Дырявой Чаши",
+                "fact": "В Ордене Дырявой Чаши был Мастер Рыбником Сэр Шурф Лонли-Локли.",
+                "time_scope": "past"
+              },
+              {
+                "category": "magic",
+                "subject": "Перчатки Смерти",
+                "fact": "Перчатки Смерти были страшным оружием, изготовленным Сэром Шурфом Лонли-Локли.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "event",
+                "subject": "Событие, когда Сэр Шурф Лонли-Локли терроризировал Ехо",
+                "fact": "Сэр Шурф Лонли-Локли несколько лет терроризировал Ехо, не контролируя себя.",
+                "time_scope": "past"
+              },
+              {
+                "category": "event",
+                "subject": "Путешествие Сэра Джуффина Халли в Хумгат",
+                "fact": "Сэр Джуффин Халли отправил Сэра Шурфа Лонли-Локли в Хумгат, чтобы спасти его.",
+                "time_scope": "past"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 61035187441,
+            "load_duration_ns": 105693710,
+            "prompt_eval_count": 1014,
+            "prompt_eval_duration_ns": 714882123,
+            "prompt_eval_rate": 1418.42,
+            "eval_count": 446,
+            "eval_duration_ns": 59732429795,
+            "eval_rate": 7.47,
+            "overhead_ms": 482.18,
+            "total_tokens": 1460,
+            "effective_time_sec": 61.035,
+            "decode_efficiency": 0.136
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5173.0
+          },
+          "wall_clock_sec": 61.036,
+          "raw_response": "category=character | subject=Сэр Шурф Лонли-Локли | fact=Сэр Шурф Лонли-Локли был Мастером Рыбником в Ордене Дырявой Чаши. | time_scope=past\ncategory=character | subject=Сэр Шурф Лонли-Локли | fact=Сэр Шурф Лонли-Локли носил Перчатки Смерти. | time_scope=timeless\ncategory=character | subject=Сэр Джуффин Халли | fact=Сэр Джуффин Халли спас Сэра Шурфа Лонли-Локли от безумия. | time_scope=past\ncategory=character | subject=Хельна | fact=Хельна была женой Сэра Шурфа Лонли-Локли. | time_scope=timeless\ncategory=place | subject=Орден Дырявой Чаши | fact=В Ордене Дырявой Чаши был Мастер Рыбником Сэр Шурф Лонли-Локли. | time_scope=past\ncategory=magic | subject=Перчатки Смерти | fact=Перчатки Смерти были страшным оружием, изготовленным Сэром Шурфом Лонли-Локли. | time_scope=timeless\ncategory=event | subject=Событие, когда Сэр Шурф Лонли-Локли терроризировал Ехо | fact=Сэр Шурф Лонли-Локли несколько лет терроризировал Ехо, не контролируя себя. | time_scope=past\ncategory=event | subject=Путешествие Сэра Джуффина Халли в Хумгат | fact=Сэр Джуффин Халли отправил Сэра Шурфа Лонли-Локли в Хумгат, чтобы спасти его. | time_scope=past"
+        },
+        {
+          "case_id": "master_winds_08_customs",
+          "quality": {
+            "hit_rate": 0.5,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 5,
+            "hits": [
+              true,
+              true,
+              false,
+              false
+            ],
+            "misses": [
+              "subject~'амобилер' fact~'кристалл'",
+              "subject~'лоохи' fact~'одежд'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "custom",
+                "subject": "камра",
+                "fact": "Камра — горький горячий напиток, популярный в Ехо.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Ехо",
+                "fact": "В Ехо нет электричества, телефонов и сигарет.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "custom",
+                "subject": "лоохи",
+                "fact": "Лоохи — длинные мантии, которые носят жители Ехо.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "vehicle",
+                "subject": "амобилей",
+                "fact": "Амобилеи движутся на магических кристаллах.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "character",
+                "subject": "автор",
+                "fact": "Автор вожет свой амобилей как бешеный, пугая половину города.",
+                "time_scope": "past"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 25695933333,
+            "load_duration_ns": 110512096,
+            "prompt_eval_count": 958,
+            "prompt_eval_duration_ns": 610106925,
+            "prompt_eval_rate": 1570.22,
+            "eval_count": 183,
+            "eval_duration_ns": 24768502254,
+            "eval_rate": 7.39,
+            "overhead_ms": 206.81,
+            "total_tokens": 1141,
+            "effective_time_sec": 25.696,
+            "decode_efficiency": 0.134
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5154.0
+          },
+          "wall_clock_sec": 25.697,
+          "raw_response": "category=custom | subject=камра | fact=Камра — горький горячий напиток, популярный в Ехо. | time_scope=timeless\ncategory=place | subject=Ехо | fact=В Ехо нет электричества, телефонов и сигарет. | time_scope=timeless\ncategory=custom | subject=лоохи | fact=Лоохи — длинные мантии, которые носят жители Ехо. | time_scope=timeless\ncategory=vehicle | subject=амобилей | fact=Амобилеи движутся на магических кристаллах. | time_scope=timeless\ncategory=character | subject=автор | fact=Автор вожет свой амобилей как бешеный, пугая половину города. | time_scope=past"
+        }
+      ]
+    },
+    "mistral:7b": {
+      "spec": {
+        "group": "A",
+        "params_total": "7B",
+        "params_active": "7B",
+        "vram_est_gb": 5.0,
+        "notes": "format discipline check"
+      },
+      "model_info": {
+        "model_name": "mistral:7b",
+        "size_vram": 1812072448,
+        "size_total": 5153245184,
+        "offload_ratio": 0.3516371496598288,
+        "size_vram_mb": 1728.126953125,
+        "size_total_mb": 4914.517578125,
+        "quantization": "Q4_K_M",
+        "parameter_size": "7.2B",
+        "family": "llama"
+      },
+      "gpu_metrics": {
+        "vram_used_peak_mb": 5308.0,
+        "vram_used_avg_mb": 5081.6,
+        "vram_free_min_mb": 613.0,
+        "gpu_util_avg": 43.3,
+        "gpu_util_max": 94.0,
+        "mem_util_avg": 30.7,
+        "temp_avg_c": 72.3,
+        "temp_max_c": 75.0,
+        "power_avg_w": 38.0,
+        "power_max_w": 56.47,
+        "power_limit_w": null,
+        "gpu_clock_avg_mhz": 2685.0,
+        "vram_clock_avg_mhz": 8201.0,
+        "is_throttling": false,
+        "samples": 138
+      },
+      "cpu_metrics": {},
+      "bottleneck": "CPU_OFFLOAD",
+      "aggregate": {
+        "avg_hit_rate": 0.5423,
+        "avg_precision": 0.9583,
+        "avg_time_sec": 33.205,
+        "format_reliability": 1.0,
+        "avg_eval_rate": 6.78,
+        "avg_prompt_eval_rate": 1536.36,
+        "avg_total_tokens": 1451.0,
+        "estimated_pipeline_hours": 35.4,
+        "estimated_pipeline_hours_ensemble": 46.0,
+        "quality_speed_score": 0.01565,
+        "quality_score": 0.519668,
+        "efficiency_score": 0.002948
+      },
+      "cases": [
+        {
+          "case_id": "stranger_01_juffin_intro",
+          "quality": {
+            "hit_rate": 0.5,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 3,
+            "hits": [
+              true,
+              false
+            ],
+            "misses": [
+              "subject~'Макс' fact~'камр'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "character",
+                "subject": "Джуффин",
+                "fact": "Джуффин является шефом Тайного Сыска в городе Ехо.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Тайный Сыск",
+                "fact": "Тайный Сыск — это секретное подразделение, которое действует на службе правительства города Ехо.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "event",
+                "subject": "Макс",
+                "fact": "Макс получает задание от Джуффина проверить некоторое место в городе Ехо.",
+                "time_scope": "past"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 22689787483,
+            "load_duration_ns": 16308920,
+            "prompt_eval_count": 1206,
+            "prompt_eval_duration_ns": 2290819613,
+            "prompt_eval_rate": 526.45,
+            "eval_count": 148,
+            "eval_duration_ns": 20302549582,
+            "eval_rate": 7.29,
+            "overhead_ms": 80.11,
+            "total_tokens": 1354,
+            "effective_time_sec": 22.69,
+            "decode_efficiency": 0.133
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5223.0
+          },
+          "wall_clock_sec": 22.691,
+          "raw_response": " category=character | subject=Джуффин | fact=Джуффин является шефом Тайного Сыска в городе Ехо. | time_scope=timeless\ncategory=place | subject=Тайный Сыск | fact=Тайный Сыск — это секретное подразделение, которое действует на службе правительства города Ехо. | time_scope=timeless\ncategory=event | subject=Макс | fact=Макс получает задание от Джуффина проверить некоторое место в городе Ехо. | time_scope=past"
+        },
+        {
+          "case_id": "stranger_02_house_bridge",
+          "quality": {
+            "hit_rate": 0.6,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 7,
+            "hits": [
+              true,
+              false,
+              true,
+              false,
+              true
+            ],
+            "misses": [
+              "subject~'Дом у Моста' fact~'Хурон'",
+              "subject~'Орден Семилистника' fact~'резиденци'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Дом у Моста служит штабом Тайного Сыска.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "character",
+                "subject": "Джуффин",
+                "fact": "Джуффин является лидером Тайного Сыскного Войска.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Хурон",
+                "fact": "Хурон — река, на которой расположен Дом у Моста.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "custom",
+                "subject": "камра",
+                "fact": "Камра — горький горячий напиток, популярный в Ехо.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "history",
+                "subject": "Гуриг Восьмой",
+                "fact": "Гуриг Восьмой подарил Дом у Моста Тайному Сыскному Войску.",
+                "time_scope": "past"
+              },
+              {
+                "category": "place",
+                "subject": "Орден Семилистник",
+                "fact": "Ранее Дом у Моста был резиденцией Ордена Семилистника.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Сэр Кофа Йох",
+                "fact": "Сэр Кофа Йох является членом Тайного Сыскного Войска и сидит в Доме у Моста.",
+                "time_scope": "timeless"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 46654125216,
+            "load_duration_ns": 19882522,
+            "prompt_eval_count": 1241,
+            "prompt_eval_duration_ns": 728553214,
+            "prompt_eval_rate": 1703.38,
+            "eval_count": 320,
+            "eval_duration_ns": 45773850149,
+            "eval_rate": 6.99,
+            "overhead_ms": 131.84,
+            "total_tokens": 1561,
+            "effective_time_sec": 46.654,
+            "decode_efficiency": 0.127
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5251.0
+          },
+          "wall_clock_sec": 46.655,
+          "raw_response": " category=place | subject=Дом у Моста | fact=Дом у Моста служит штабом Тайного Сыска. | time_scope=timeless\ncategory=character | subject=Джуффин | fact=Джуффин является лидером Тайного Сыскного Войска. | time_scope=timeless\ncategory=place | subject=Хурон | fact=Хурон — река, на которой расположен Дом у Моста. | time_scope=timeless\ncategory=custom | subject=камра | fact=Камра — горький горячий напиток, популярный в Ехо. | time_scope=timeless\ncategory=history | subject=Гуриг Восьмой | fact=Гуриг Восьмой подарил Дом у Моста Тайному Сыскному Войску. | time_scope=past\ncategory=place | subject=Орден Семилистник | fact=Ранее Дом у Моста был резиденцией Ордена Семилистника. | time_scope=past\ncategory=character | subject=Сэр Кофа Йох | fact=Сэр Кофа Йох является членом Тайного Сыскного Войска и сидит в Доме у Моста. | time_scope=timeless"
+        },
+        {
+          "case_id": "master_winds_03_magic",
+          "quality": {
+            "hit_rate": 0.5,
+            "precision": 0.6667,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 3,
+            "hits": [
+              false,
+              false,
+              true,
+              true,
+              true,
+              false
+            ],
+            "misses": [
+              "subject~'Кодекс Хрембера' fact~'Очевидн'",
+              "subject~'Кодекс Хрембера' fact~'ступен'",
+              "subject~'Кодекс Хрембера' fact~'отменён'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "magic",
+                "subject": "Очевидная магия",
+                "fact": "Очевидная магия имела 234 ступени, и каждому жителю Соединённого Королевства дозволялось использовать магию только до определённой ступени.",
+                "time_scope": "past"
+              },
+              {
+                "category": "place",
+                "subject": "Холоми",
+                "fact": "Холоми — тюрьма-крепость, в которой невозможно колдовать. Построена ещё во времена Эпохи Орденов. В настоящее время сидят там только по-настоящему опасные преступники.",
+                "time_scope": "past"
+              },
+              {
+                "category": "magic",
+                "subject": "Безмолвная речь",
+                "fact": "Безмолвная речь является обычным способом общения на расстоянии. Ей владеет почти каждый житель Ехо.",
+                "time_scope": "timeless"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 35577875451,
+            "load_duration_ns": 15844453,
+            "prompt_eval_count": 1262,
+            "prompt_eval_duration_ns": 714407511,
+            "prompt_eval_rate": 1766.5,
+            "eval_count": 236,
+            "eval_duration_ns": 34747065283,
+            "eval_rate": 6.79,
+            "overhead_ms": 100.56,
+            "total_tokens": 1498,
+            "effective_time_sec": 35.578,
+            "decode_efficiency": 0.123
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 4953.0
+          },
+          "wall_clock_sec": 35.58,
+          "raw_response": " category=magic | subject=Очевидная магия | fact=Очевидная магия имела 234 ступени, и каждому жителю Соединённого Королевства дозволялось использовать магию только до определённой ступени. | time_scope=past\ncategory=place | subject=Холоми | fact=Холоми — тюрьма-крепость, в которой невозможно колдовать. Построена ещё во времена Эпохи Орденов. В настоящее время сидят там только по-настоящему опасные преступники. | time_scope=past\ncategory=magic | subject=Безмолвная речь | fact=Безмолвная речь является обычным способом общения на расстоянии. Ей владеет почти каждый житель Ехо. | time_scope=timeless"
+        },
+        {
+          "case_id": "dark_side_04_flashback",
+          "quality": {
+            "hit_rate": 0.6667,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 4,
+            "hits": [
+              false,
+              true,
+              true,
+              true,
+              false,
+              true
+            ],
+            "misses": [
+              "subject~'Смутные Времена' fact~'Орден'",
+              "subject~'Нуфлин Мони Мах' fact~'Кеттарийски'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "character",
+                "subject": "Сэр Манга Мелифаро",
+                "fact": "Сэр Манга Мелифаро рассказывал о Смутных Временах, когда Ордена воевали друг с другом.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Лойсо Пондохва",
+                "fact": "Лойсо Пондохва был Великим Магистром Водяной Вороны и был самым могущественным магом той эпохи.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Нуфлин Мони Мах",
+                "fact": "Нуфлин Мони Мах был Великим Магистром Семилистника, известен своей хитростью.",
+                "time_scope": "past"
+              },
+              {
+                "category": "place",
+                "subject": "Кеттарийские Охотники",
+                "fact": "Кеттарийские Охотники решили исход войны между Орденами.",
+                "time_scope": "past"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 36328242128,
+            "load_duration_ns": 18047963,
+            "prompt_eval_count": 1249,
+            "prompt_eval_duration_ns": 737474576,
+            "prompt_eval_rate": 1693.62,
+            "eval_count": 230,
+            "eval_duration_ns": 35468798945,
+            "eval_rate": 6.48,
+            "overhead_ms": 103.92,
+            "total_tokens": 1479,
+            "effective_time_sec": 36.328,
+            "decode_efficiency": 0.118
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5007.0
+          },
+          "wall_clock_sec": 36.331,
+          "raw_response": " category=character | subject=Сэр Манга Мелифаро | fact=Сэр Манга Мелифаро рассказывал о Смутных Временах, когда Ордена воевали друг с другом. | time_scope=past\ncategory=character | subject=Лойсо Пондохва | fact=Лойсо Пондохва был Великим Магистром Водяной Вороны и был самым могущественным магом той эпохи. | time_scope=past\ncategory=character | subject=Нуфлин Мони Мах | fact=Нуфлин Мони Мах был Великим Магистром Семилистника, известен своей хитростью. | time_scope=past\ncategory=place | subject=Кеттарийские Охотники | fact=Кеттарийские Охотники решили исход войны между Орденами. | time_scope=past"
+        },
+        {
+          "case_id": "dreams_05_dense_dialogue",
+          "quality": {
+            "hit_rate": 0.5,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 4,
+            "hits": [
+              false,
+              true
+            ],
+            "misses": [
+              "subject~'Обжора Бунба'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "place",
+                "subject": "Дом у Моста",
+                "fact": "Дом у Моста служит штабом Тайного Сыска.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Улица Медных Горшков",
+                "fact": "Улица Медных Горшков ведет к Дому у Моста.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "custom",
+                "subject": "Гуппарок",
+                "fact": "Гуппарок — это пастила, о которой говорится в диалоге.",
+                "time_scope": "past"
+              },
+              {
+                "category": "place",
+                "subject": "Обжора Бунбу",
+                "fact": "Обжора Бунбу — ресторан, куда герои направляются после выхода из Дома у Моста.",
+                "time_scope": "timeless"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 30892068896,
+            "load_duration_ns": 16027091,
+            "prompt_eval_count": 1211,
+            "prompt_eval_duration_ns": 736976641,
+            "prompt_eval_rate": 1643.2,
+            "eval_count": 191,
+            "eval_duration_ns": 30050004840,
+            "eval_rate": 6.36,
+            "overhead_ms": 89.06,
+            "total_tokens": 1402,
+            "effective_time_sec": 30.892,
+            "decode_efficiency": 0.116
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5039.0
+          },
+          "wall_clock_sec": 30.894,
+          "raw_response": " category=place | subject=Дом у Моста | fact=Дом у Моста служит штабом Тайного Сыска. | time_scope=timeless\ncategory=place | subject=Улица Медных Горшков | fact=Улица Медных Горшков ведет к Дому у Моста. | time_scope=timeless\ncategory=custom | subject=Гуппарок | fact=Гуппарок — это пастила, о которой говорится в диалоге. | time_scope=past\ncategory=place | subject=Обжора Бунбу | fact=Обжора Бунбу — ресторан, куда герои направляются после выхода из Дома у Моста. | time_scope=timeless"
+        },
+        {
+          "case_id": "dreams_06_landscape",
+          "quality": {
+            "hit_rate": 0.0,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 4,
+            "hits": [
+              false
+            ],
+            "misses": [
+              "subject~'Мохнатый Дом' fact~'башн'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "place",
+                "subject": "Мохnatyj Dom",
+                "fact": "Мохнатый Дом - башня, расположенная на крыше которой служит жилищем Макса Фрая.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "Ехо",
+                "fact": "Ехо - город, в котором происходит действие книг Макса Фрая.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "custom",
+                "subject": "выпечка",
+                "fact": "Выпечка - запах, который тянется по улицам Ехо.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "character",
+                "subject": "Макс",
+                "fact": "Макс Фрей сидит на крыше Мохнатого Дома и смотрит на закат над Ехо.",
+                "time_scope": "past"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 28488415791,
+            "load_duration_ns": 22209299,
+            "prompt_eval_count": 1215,
+            "prompt_eval_duration_ns": 725187195,
+            "prompt_eval_rate": 1675.43,
+            "eval_count": 190,
+            "eval_duration_ns": 27639598905,
+            "eval_rate": 6.87,
+            "overhead_ms": 101.42,
+            "total_tokens": 1405,
+            "effective_time_sec": 28.488,
+            "decode_efficiency": 0.125
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 4951.0
+          },
+          "wall_clock_sec": 28.49,
+          "raw_response": " category=place | subject=Мохnatyj Dom | fact=Мохнатый Дом - башня, расположенная на крыше которой служит жилищем Макса Фрая. | time_scope=timeless\ncategory=place | subject=Ехо | fact=Ехо - город, в котором происходит действие книг Макса Фрая. | time_scope=timeless\ncategory=custom | subject=выпечка | fact=Выпечка - запах, который тянется по улицам Ехо. | time_scope=timeless\ncategory=character | subject=Макс | fact=Макс Фрей сидит на крыше Мохнатого Дома и смотрит на закат над Ехо. | time_scope=past"
+        },
+        {
+          "case_id": "stranger_07_shurf",
+          "quality": {
+            "hit_rate": 0.5714,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 4,
+            "hits": [
+              false,
+              true,
+              false,
+              true,
+              true,
+              false,
+              true
+            ],
+            "misses": [
+              "subject~'Шурф Лонли-Локли' fact~'Пресекающий'",
+              "subject~'Шурф Лонли-Локли' fact~'Ледяной Руки'",
+              "subject~'Шурф Лонли-Локли' fact~'Хумгат'"
+            ],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "character",
+                "subject": "Шурф Лонли-Локли",
+                "fact": "Шурф Лонли-Локли был Мастером Рыбником в Ордене Дырявой Чаши, известен как Безумный Рыбник.",
+                "time_scope": "past"
+              },
+              {
+                "category": "character",
+                "subject": "Шурф Лонли-Локли",
+                "fact": "Шурф Лонли-Локли был Мастером Пресекающим Ненужные Жизни, носит Перчатки Смерти.",
+                "time_scope": "current"
+              },
+              {
+                "category": "character",
+                "subject": "Шурф Лонли-Локли",
+                "fact": "Шурф Лонли-Локли был женат на Хельне, поэтессе.",
+                "time_scope": "past"
+              },
+              {
+                "category": "place",
+                "subject": "Хумгат",
+                "fact": "Хумгат — место, куда отправил Шурфа Сэр Джуффин Халли, после чего он стал более сдержанным.",
+                "time_scope": "past"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 39874412395,
+            "load_duration_ns": 18007582,
+            "prompt_eval_count": 1276,
+            "prompt_eval_duration_ns": 783318866,
+            "prompt_eval_rate": 1628.97,
+            "eval_count": 252,
+            "eval_duration_ns": 38962007396,
+            "eval_rate": 6.47,
+            "overhead_ms": 111.08,
+            "total_tokens": 1528,
+            "effective_time_sec": 39.874,
+            "decode_efficiency": 0.118
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 4974.0
+          },
+          "wall_clock_sec": 39.876,
+          "raw_response": " category=character | subject=Шурф Лонли-Локли | fact=Шурф Лонли-Локли был Мастером Рыбником в Ордене Дырявой Чаши, известен как Безумный Рыбник. | time_scope=past\ncategory=character | subject=Шурф Лонли-Локли | fact=Шурф Лонли-Локли был Мастером Пресекающим Ненужные Жизни, носит Перчатки Смерти. | time_scope=current\ncategory=character | subject=Шурф Лонли-Локли | fact=Шурф Лонли-Локли был женат на Хельне, поэтессе. | time_scope=past\ncategory=place | subject=Хумгат | fact=Хумгат — место, куда отправил Шурфа Сэр Джуффин Халли, после чего он стал более сдержанным. | time_scope=past"
+        },
+        {
+          "case_id": "master_winds_08_customs",
+          "quality": {
+            "hit_rate": 1.0,
+            "precision": 1.0,
+            "noise_rate": 0.0,
+            "parse_errors": 0,
+            "total_facts": 4,
+            "hits": [
+              true,
+              true,
+              true,
+              true
+            ],
+            "misses": [],
+            "noise_markers": [],
+            "facts": [
+              {
+                "category": "custom",
+                "subject": "камра",
+                "fact": "Камра — горький горячий напиток, популярный в Ехо.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "place",
+                "subject": "улица",
+                "fact": "Улицы Ехо не имеют названий.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "custom",
+                "subject": "лоохи",
+                "fact": "Лоохи — одежда, носящаяся в Ехо.",
+                "time_scope": "timeless"
+              },
+              {
+                "category": "transportation",
+                "subject": "амобилеры",
+                "fact": "Амобилеры — экипажи на магических кристаллах, используемые для передвижения по улицам Ехо.",
+                "time_scope": "timeless"
+              }
+            ]
+          },
+          "llm_metrics": {
+            "total_duration_ns": 25120877684,
+            "load_duration_ns": 15787530,
+            "prompt_eval_count": 1215,
+            "prompt_eval_duration_ns": 734892661,
+            "prompt_eval_rate": 1653.3,
+            "eval_count": 169,
+            "eval_duration_ns": 24296476692,
+            "eval_rate": 6.96,
+            "overhead_ms": 73.72,
+            "total_tokens": 1384,
+            "effective_time_sec": 25.121,
+            "decode_efficiency": 0.126
+          },
+          "gpu_snapshot": {
+            "vram_usage_mb": 5033.0
+          },
+          "wall_clock_sec": 25.122,
+          "raw_response": " category=custom | subject=камра | fact=Камра — горький горячий напиток, популярный в Ехо. | time_scope=timeless\ncategory=place | subject=улица | fact=Улицы Ехо не имеют названий. | time_scope=timeless\ncategory=custom | subject=лоохи | fact=Лоохи — одежда, носящаяся в Ехо. | time_scope=timeless\ncategory=transportation | subject=амобилеры | fact=Амобилеры — экипажи на магических кристаллах, используемые для передвижения по улицам Ехо. | time_scope=timeless"
+        }
+      ]
+    },
+    "gemma4:26b": {
+      "spec": {
+        "group": "B",
+        "params_total": "26B MoE",
+        "params_active": "3.8B",
+        "vram_est_gb": 6.0,
+        "notes": "MoE 128 experts, tight fit"
+      },
+      "model_info": {},
+      "gpu_metrics": {},
+      "cpu_metrics": {},
+      "bottleneck": "UNKNOWN",
+      "aggregate": {
+        "avg_hit_rate": 0.0,
+        "avg_precision": 0.0,
+        "avg_time_sec": 0.0,
+        "format_reliability": 0.0,
+        "avg_eval_rate": 0.0,
+        "avg_prompt_eval_rate": 0.0,
+        "avg_total_tokens": 0.0,
+        "estimated_pipeline_hours": 0.0,
+        "estimated_pipeline_hours_ensemble": 0.0,
+        "quality_speed_score": 0.0,
+        "quality_score": 0.0,
+        "efficiency_score": 0.0
+      },
+      "cases": []
+    },
+    "qwen3-coder:30b": {
+      "spec": {
+        "group": "B",
+        "params_total": "30B MoE",
+        "params_active": "3.3B",
+        "vram_est_gb": 6.0,
+        "notes": "coding-focused MoE"
+      },
+      "model_info": {},
+      "gpu_metrics": {},
+      "cpu_metrics": {},
+      "bottleneck": "UNKNOWN",
+      "aggregate": {
+        "avg_hit_rate": 0.0,
+        "avg_precision": 0.0,
+        "avg_time_sec": 0.0,
+        "format_reliability": 0.0,
+        "avg_eval_rate": 0.0,
+        "avg_prompt_eval_rate": 0.0,
+        "avg_total_tokens": 0.0,
+        "estimated_pipeline_hours": 0.0,
+        "estimated_pipeline_hours_ensemble": 0.0,
+        "quality_speed_score": 0.0,
+        "quality_score": 0.0,
+        "efficiency_score": 0.0
+      },
+      "cases": []
+    }
+  }
+}
