@@ -8456,6 +8456,114 @@ def find_ollama_binary() -> Optional[str]:
     return None
 
 
+# ──────────────────────────────────────────────
+# vllm management
+# ──────────────────────────────────────────────
+
+def is_vllm_running(port: int = 8000) -> bool:
+    """Проверяет, отвечает ли vllm OpenAI-совместимый сервер на указанном порту."""
+    try:
+        req = urllib.request.Request(
+            f"http://localhost:{port}/health",
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def ensure_vllm(
+    model: str,
+    port: int = 8000,
+    gpu_memory_utilization: float = 0.90,
+    max_num_seqs: int = 32,
+    extra_args: Optional[list] = None,
+    startup_timeout: int = 300,
+) -> Optional[subprocess.Popen]:
+    """
+    Убеждается, что vllm запущен с нужной моделью.
+    Если уже запущен — просто возвращает None.
+    Иначе — стартует в фоне и ждёт готовности (до startup_timeout сек).
+    """
+    if is_vllm_running(port):
+        print(f"vllm уже запущен на порту {port}")
+        return None
+
+    print(f"Запускаю vllm: модель={model}, порт={port}, "
+          f"gpu_util={gpu_memory_utilization}, max_seqs={max_num_seqs}...")
+
+    cmd = [
+        "python", "-m", "vllm.entrypoints.openai.api_server",
+        "--model", model,
+        "--port", str(port),
+        "--gpu-memory-utilization", str(gpu_memory_utilization),
+        "--max-num-seqs", str(max_num_seqs),
+        "--trust-remote-code",
+    ]
+    if extra_args:
+        cmd.extend(extra_args)
+
+    log_path = Path("vllm_server.log")
+    log_file = open(log_path, "w", encoding="utf-8")
+    print(f"  Лог vllm → {log_path.resolve()}")
+
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=log_file,
+            stderr=log_file,
+            preexec_fn=os.setsid if os.name != "nt" else None,
+        )
+    except FileNotFoundError:
+        log_file.close()
+        print("  Ошибка: python не найден в PATH или vllm не установлен.")
+        print("  Установи: pip install vllm")
+        exit(1)
+
+    print(f"  PID {process.pid}. Ожидаю готовности (до {startup_timeout} сек)...")
+    for i in range(startup_timeout):
+        time.sleep(1)
+        if process.poll() is not None:
+            log_file.close()
+            print(f"  vllm завершился с кодом {process.returncode}")
+            print(f"  Подробности: {log_path.resolve()}")
+            exit(1)
+        if is_vllm_running(port):
+            print(f"  vllm готов (заняло {i + 1} сек)")
+            log_file.close()
+            return process
+    else:
+        log_file.close()
+        print(f"  Таймаут ожидания vllm ({startup_timeout} сек)")
+        print(f"  Подробности: {log_path.resolve()}")
+        process.terminate()
+        exit(1)
+
+
+def stop_vllm(process: Optional[subprocess.Popen]):
+    """Останавливает vllm сервер, если мы его запускали."""
+    if process is None:
+        return
+    if process.poll() is not None:
+        return
+
+    print("\nОстанавливаю vllm сервер...")
+    try:
+        if os.name != "nt":
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+        else:
+            process.terminate()
+        process.wait(timeout=15)
+        print("  vllm остановлен")
+    except Exception as e:
+        print(f"  Не удалось остановить vllm: {e}")
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+
 def ensure_ollama(model: str) -> Optional[subprocess.Popen]:
     """
     Убеждается, что ollama запущена и модель загружена.
@@ -8569,8 +8677,11 @@ def main() -> int:
                         help="Макс. количество синтетических пар на книгу (по умолчанию 500)")
     parser.add_argument("--no-resume", action="store_true",
                         help="Не пропускать уже обработанные книги, начать заново")
-    parser.add_argument("--workers", type=int, default=2,
-                        help="Количество параллельных воркеров (по умолчанию 2)")
+    parser.add_argument("--workers", type=int, default=4,
+                        help="Количество параллельных воркеров на книгу (по умолчанию 4; для vllm на RTX 5090 рекомендуется 16)")
+    parser.add_argument("--parallel-books", type=int, default=1,
+                        help="Сколько книг обрабатывать одновременно (по умолчанию 1; "
+                             "для vllm на RTX 5090 рекомендуется 4, workers делятся между книгами)")
     parser.add_argument("--voice-extractor", choices=("regex", "llm"), default="regex",
                         help="Чем извлекать голос Макса: быстрым regex или LLM (по умолчанию regex)")
     parser.add_argument("--knowledge-protocol", choices=("lines", "json"), default="lines",
@@ -8595,13 +8706,47 @@ def main() -> int:
                         help="Таймаут одного запроса к модели в секундах (по умолчанию 180)")
     parser.add_argument("--seed", type=int, default=42,
                         help="Seed для воспроизводимости (по умолчанию 42)")
+
+    # ── vllm / backend ──
+    parser.add_argument("--backend", choices=("auto", "ollama", "vllm"), default="auto",
+                        help="LLM-бэкенд: auto (vllm если parallel-books>1, иначе ollama), "
+                             "ollama, vllm (по умолчанию auto)")
+    parser.add_argument("--vllm-model", default="",
+                        help="HuggingFace-путь к модели для vllm (если отличается от --model). "
+                             "Пример: Qwen/Qwen2.5-14B-Instruct")
+    parser.add_argument("--vllm-port", type=int, default=8000,
+                        help="Порт vllm сервера (по умолчанию 8000)")
+    parser.add_argument("--vllm-gpu-util", type=float, default=0.90,
+                        help="Доля VRAM для vllm, 0.0–1.0 (по умолчанию 0.90)")
+    parser.add_argument("--vllm-max-seqs", type=int, default=32,
+                        help="max-num-seqs для vllm — макс. одновременных запросов "
+                             "(по умолчанию 32; RTX 5090 тянет 32+)")
+    parser.add_argument("--vllm-extra-args", default="",
+                        help="Дополнительные аргументы для vllm через пробел, "
+                             "например: '--dtype bfloat16 --max-model-len 32768'")
+
     args = parser.parse_args()
     _STOP_REQUESTED.clear()
+
+    # ── Автовыбор бэкенда ──
+    _use_vllm = (
+        args.backend == "vllm"
+        or (args.backend == "auto" and args.parallel_books > 1)
+    )
+    if _use_vllm:
+        # api_base перебиваем на vllm, если пользователь не задал явно
+        if args.api_base == "http://localhost:11434/v1":
+            args.api_base = f"http://localhost:{args.vllm_port}/v1"
+        # no_auto_serve для ollama не нужен — управляем vllm сами
+        args.no_auto_serve = True
 
     # Воспроизводимый random
     random.seed(args.seed)
     print(f"Random seed: {args.seed}")
     print(f"Voice extractor: {args.voice_extractor}")
+    if args.parallel_books > 1:
+        per_bw = max(1, args.workers // args.parallel_books)
+        print(f"Parallel books: {args.parallel_books} (по {per_bw} воркеров на книгу)")
 
     config = Config(
         books_dir=args.books_dir,
@@ -8648,6 +8793,7 @@ def main() -> int:
         "output_dir": config.output_dir,
         "chunk_size": config.chunk_size,
         "workers": args.workers,
+        "parallel_books": args.parallel_books,
         "voice_extractor": args.voice_extractor,
         "request_timeout": config.request_timeout,
         "llm_trace_enabled": config.llm_trace_enabled,
@@ -8682,15 +8828,19 @@ def main() -> int:
         "recent_events": [],
     }
 
+    # Лок для защиты общего состояния при параллельной обработке книг
+    _state_lock = threading.Lock()
+
     def metadata_event(event_type: str = "", message: str = "", **updates):
-        return update_metadata_snapshot(
-            metadata_state,
-            meta_path,
-            history_path=metadata_history_path,
-            event_type=event_type,
-            message=message,
-            **updates,
-        )
+        with _state_lock:
+            return update_metadata_snapshot(
+                metadata_state,
+                meta_path,
+                history_path=metadata_history_path,
+                event_type=event_type,
+                message=message,
+                **updates,
+            )
 
     metadata_event(
         "run_started",
@@ -8700,9 +8850,12 @@ def main() -> int:
     )
 
     def refresh_global_knowledge_snapshot(event_type: str, current_book: Optional[str] = None):
+        # Снимок all_knowledge под локом, чтобы не поймать частичное состояние
+        with _state_lock:
+            knowledge_snapshot = list(all_knowledge)
         raw_snapshot, unique_snapshot = write_global_knowledge_snapshot(
             config.output_dir,
-            all_knowledge,
+            knowledge_snapshot,
             narrator="Макс",
             log_prefix="[runtime][global_knowledge]",
         )
@@ -8714,20 +8867,48 @@ def main() -> int:
             knowledge_facts=len(unique_snapshot),
         )
 
-    # ── Управление ollama ──
-    ollama_process = None
+    # ── Управление LLM-сервером ──
+    # Объявляем до try, чтобы finally их видел
+    _server_process: Optional[subprocess.Popen] = None
+    _server_backend = "vllm" if _use_vllm else "ollama"
 
-    # Гарантируем остановку ollama при выходе
     def cleanup():
-        stop_ollama(ollama_process)
+        if _server_backend == "vllm":
+            stop_vllm(_server_process)
+        else:
+            stop_ollama(_server_process)
 
     atexit.register(cleanup)
     signal.signal(signal.SIGINT, handle_shutdown_signal)
     signal.signal(signal.SIGTERM, handle_shutdown_signal)
 
     try:
-        if not args.no_auto_serve:
-            ollama_process = ensure_ollama(config.model)
+        if _use_vllm:
+            vllm_model = args.vllm_model or args.model
+            vllm_extra = args.vllm_extra_args.split() if args.vllm_extra_args else []
+            _server_process = ensure_vllm(
+                model=vllm_model,
+                port=args.vllm_port,
+                gpu_memory_utilization=args.vllm_gpu_util,
+                max_num_seqs=args.vllm_max_seqs,
+                extra_args=vllm_extra,
+            )
+            # Имя модели для API-вызовов = то что vllm знает как "model"
+            # vllm отдаёт имя модели через /v1/models; берём первое
+            try:
+                req = urllib.request.Request(
+                    f"http://localhost:{args.vllm_port}/v1/models", method="GET"
+                )
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    models_data = json.loads(resp.read())
+                    served_model = models_data["data"][0]["id"]
+                    if config.model != served_model:
+                        print(f"  vllm отдаёт модель: {served_model!r} (используем её для запросов)")
+                        config.model = served_model
+            except Exception:
+                pass
+        elif not args.no_auto_serve:
+            _server_process = ensure_ollama(config.model)
 
         # Инициализация клиента
         if _openai_import_error is not None:
@@ -8738,9 +8919,7 @@ def main() -> int:
         # Автодетект ollama → нативный API с think=false
         global _use_ollama_native
         if ":11434" in config.api_base:
-            # Проверяем что нативный API отвечает
             try:
-                import urllib.request
                 base = config.api_base.rstrip("/")
                 if base.endswith("/v1"):
                     base = base[:-3]
@@ -8752,7 +8931,9 @@ def main() -> int:
             except Exception:
                 pass
 
-        if not _use_ollama_native:
+        if _use_vllm:
+            print(f"Бэкенд: vllm на {config.api_base}")
+        elif not _use_ollama_native:
             print("Используется OpenAI-совместимый API")
 
         # Проверка соединения
@@ -8837,6 +9018,15 @@ def main() -> int:
         pipeline_t0 = time.time()
         processed_books = 0
 
+        # Воркеры на книгу: при параллельных книгах делим пул между ними
+        parallel_books = max(1, args.parallel_books)
+        per_book_workers = max(1, args.workers // parallel_books)
+        if parallel_books > 1:
+            log_event(
+                f"Параллельная обработка книг: {parallel_books} книг одновременно, "
+                f"{per_book_workers} воркеров на книгу (всего {per_book_workers * parallel_books})"
+            )
+
         def stage_for_book_event(event_type: str) -> str:
             if event_type.startswith("synth_"):
                 return "book_synth"
@@ -8853,6 +9043,7 @@ def main() -> int:
                 for key, value in event_data.items()
                 if key != "book_name"
             }
+            # metadata_event уже потокобезопасен (содержит _state_lock)
             metadata_event(
                 event_type,
                 current_stage=stage_for_book_event(event_type),
@@ -8863,28 +9054,20 @@ def main() -> int:
                 },
             )
 
-        for _, (book_name, text) in enumerate(books):
+        def _process_one_book(book_name: str, text: str) -> None:
+            """Обрабатывает одну книгу; потокобезопасна для параллельного запуска."""
+            nonlocal processed_books
+
             if stop_requested():
                 raise GracefulInterrupt("Остановка запрошена перед следующей книгой")
 
-            # Прогресс по книгам
-            if processed_books > 0 and books_pending_total > 0:
-                elapsed = time.time() - pipeline_t0
-                per_book = elapsed / processed_books
-                books_left = books_pending_total - processed_books
-                eta_total = per_book * books_left
-                print(f"\n  📊 Книг обработано: {processed_books}/{books_pending_total}, "
-                      f"прошло {fmt_duration(elapsed)}, "
-                      f"ETA всего пайплайна: {fmt_duration(eta_total)}")
-
             # Пути выходных файлов книги
             output_paths = get_book_output_paths(config.output_dir, book_name)
-
-            # ── Проверка возобновления ──
             voice_path = output_paths["voice"]
             knowledge_path = output_paths["knowledge"]
             knowledge_stream_path = output_paths["knowledge_stream"]
 
+            # ── Проверка возобновления ──
             if not args.no_resume and is_book_processed(config.output_dir, book_name):
                 print(f"\n  ⏭ Пропуск {book_name} (уже обработана, --no-resume для повтора)")
                 narrator, _ = detect_book_mode(book_name)
@@ -8896,12 +9079,13 @@ def main() -> int:
                     book_statuses={book_name: "completed_existing"},
                 )
 
+                loaded_voice: list = []
                 if voice_path.exists():
                     with open(voice_path, encoding="utf-8") as f:
                         for line in f:
                             line = line.strip()
                             if line:
-                                all_voice_pairs.append(json.loads(line))
+                                loaded_voice.append(json.loads(line))
 
                 if knowledge_path.exists():
                     with open(knowledge_path, encoding="utf-8") as f:
@@ -8923,7 +9107,6 @@ def main() -> int:
                         log_prefix=f"[reload {get_book_stem(book_name)}]",
                     )
                     loaded_knowledge = canonicalize_book_knowledge(loaded_knowledge, narrator)
-                    all_knowledge.extend(loaded_knowledge)
                     normalized_book_knowledge = deduplicate_knowledge(loaded_knowledge)
                     if knowledge_stream_path.exists():
                         knowledge_stream_path.unlink()
@@ -8934,29 +9117,40 @@ def main() -> int:
                         normalized_book_knowledge,
                         str(output_paths["knowledge_txt"]),
                     )
-                    refresh_global_knowledge_snapshot(
-                        "global_kb_snapshot_updated",
-                        current_book=book_name,
-                    )
 
+                loaded_synth: list = []
                 synth_path = output_paths["synth"]
                 if synth_path.exists():
                     with open(synth_path, encoding="utf-8") as f:
                         for line in f:
                             line = line.strip()
                             if line:
-                                all_synth_pairs.append(json.loads(line))
+                                loaded_synth.append(json.loads(line))
 
-                continue
+                with _state_lock:
+                    all_voice_pairs.extend(loaded_voice)
+                    if loaded_knowledge:
+                        all_knowledge.extend(loaded_knowledge)
+                    all_synth_pairs.extend(loaded_synth)
+                refresh_global_knowledge_snapshot(
+                    "global_kb_snapshot_updated",
+                    current_book=book_name,
+                )
+                return
+
+            # ── Снимок accumulated данных до начала обработки (без лока не читаем mid-run) ──
+            with _state_lock:
+                acc_voice_snap = list(all_voice_pairs)
+                acc_knowledge_snap = list(all_knowledge)
 
             # ── Обработка книги ──
             result = process_book(
                 client, config, book_name, text,
                 skip_synth=args.skip_synth,
                 synth_count=args.synth_count,
-                accumulated_voice=all_voice_pairs,
-                accumulated_knowledge=all_knowledge,
-                workers=args.workers,
+                accumulated_voice=acc_voice_snap,
+                accumulated_knowledge=acc_knowledge_snap,
+                workers=per_book_workers,
                 voice_extractor=args.voice_extractor,
                 books_total=max(books_pending_total, 1),
                 books_completed_before=processed_books,
@@ -8964,19 +9158,27 @@ def main() -> int:
                 seed=args.seed,
                 progress_callback=on_book_progress,
             )
-            processed_books += 1
 
-            all_voice_pairs.extend(result["voice_pairs"])
-            all_knowledge.extend(result["knowledge"])
-            all_synth_pairs.extend(result["synth_pairs"])
+            # ── Аккумуляция результатов под локом ──
+            with _state_lock:
+                processed_books += 1
+                all_voice_pairs.extend(result["voice_pairs"])
+                all_knowledge.extend(result["knowledge"])
+                all_synth_pairs.extend(result["synth_pairs"])
+
+                cur_processed = processed_books
+                cur_voice = len(all_voice_pairs)
+                cur_synth = len(all_synth_pairs)
+                cur_knowledge = len(all_knowledge)
+
             metadata_event(
                 "book_results_aggregated",
                 current_stage="books_loop",
                 current_book=book_name,
-                books_processed=processed_books,
-                voice_pairs=len(all_voice_pairs),
-                synth_pairs=len(all_synth_pairs),
-                knowledge_raw_facts=len(all_knowledge),
+                books_processed=cur_processed,
+                voice_pairs=cur_voice,
+                synth_pairs=cur_synth,
+                knowledge_raw_facts=cur_knowledge,
                 book_statuses={book_name: "completed"},
                 current_book_progress={
                     "book_name": book_name,
@@ -8990,7 +9192,7 @@ def main() -> int:
                 current_book=book_name,
             )
 
-            # Человекочитаемые версии
+            # Человекочитаемые версии (пути уникальны на книгу — без лока)
             if result["voice_pairs"]:
                 save_readable_voice(
                     result["voice_pairs"],
@@ -9007,7 +9209,36 @@ def main() -> int:
                     str(output_paths["synth_txt"]),
                 )
 
+            # Прогресс-сводка
+            with _state_lock:
+                _done = processed_books
+                _elapsed = time.time() - pipeline_t0
+            if _done > 0 and books_pending_total > 0:
+                per_book = _elapsed / _done
+                books_left = books_pending_total - _done
+                eta_total = per_book * books_left
+                log_event(
+                    f"Книг обработано: {_done}/{books_pending_total}, "
+                    f"прошло {fmt_duration(_elapsed)}, "
+                    f"ETA всего пайплайна: {fmt_duration(eta_total)}"
+                )
             print(f"  Промежуточные файлы сохранены в {config.output_dir}/")
+
+        # ── Запуск: последовательно или параллельно ──
+        if parallel_books <= 1:
+            for _, (book_name, text) in enumerate(books):
+                _process_one_book(book_name, text)
+        else:
+            from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
+            with ThreadPoolExecutor(max_workers=parallel_books, thread_name_prefix="book") as _exe:
+                _futures = {
+                    _exe.submit(_process_one_book, book_name, text): book_name
+                    for _, (book_name, text) in enumerate(books)
+                }
+                for _fut in _as_completed(_futures):
+                    if stop_requested():
+                        raise GracefulInterrupt("Остановка запрошена пользователем")
+                    _fut.result()  # пробрасывает исключение из воркера
 
         # Дедупликация датасета
         print(f"\n[{now_str()}] Дедупликация...")
@@ -9171,7 +9402,10 @@ def main() -> int:
         )
         raise
     finally:
-        stop_ollama(ollama_process)
+        if _server_backend == "vllm":
+            stop_vllm(_server_process)
+        else:
+            stop_ollama(_server_process)
 
 
 if __name__ == "__main__":
