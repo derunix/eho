@@ -8461,8 +8461,19 @@ def find_ollama_binary() -> Optional[str]:
 # ──────────────────────────────────────────────
 
 def is_vllm_running(port: int = 8000) -> bool:
-    """Проверяет, отвечает ли vllm OpenAI-совместимый сервер на указанном порту."""
-    for host in ("127.0.0.1", "localhost"):
+    """
+    Проверяет, принимает ли vllm соединения на порту.
+    Сначала TCP-сокетом (надёжно в Docker/vastai), потом HTTP /health.
+    """
+    import socket as _socket
+    for host in ("127.0.0.1", "0.0.0.0", "localhost"):
+        # 1. TCP-порт открыт?
+        try:
+            s = _socket.create_connection((host, port), timeout=2)
+            s.close()
+        except OSError:
+            continue
+        # 2. HTTP /health возвращает 200?
         try:
             req = urllib.request.Request(
                 f"http://{host}:{port}/health",
@@ -8472,7 +8483,9 @@ def is_vllm_running(port: int = 8000) -> bool:
                 if resp.status == 200:
                     return True
         except Exception:
-            continue
+            pass
+        # TCP открыт, но /health ещё не отвечает — считаем не готовым
+        return False
     return False
 
 
@@ -8525,6 +8538,7 @@ def ensure_vllm(
         exit(1)
 
     print(f"  PID {process.pid}. Ожидаю готовности (до {startup_timeout} сек)...")
+    import socket as _socket
     for i in range(startup_timeout):
         time.sleep(1)
         if process.poll() is not None:
@@ -8533,7 +8547,16 @@ def ensure_vllm(
             print(f"  Подробности: {log_path.resolve()}")
             exit(1)
         if i > 0 and i % 15 == 0:
-            print(f"  ... {i}s — жду vllm (tail -f {log_path.name})")
+            # Диагностика: что именно мешает
+            _diag = []
+            for _h in ("127.0.0.1", "localhost"):
+                try:
+                    s = _socket.create_connection((_h, port), timeout=1)
+                    s.close()
+                    _diag.append(f"{_h}:TCP✓")
+                except OSError as _e:
+                    _diag.append(f"{_h}:TCP✗({_e.strerror})")
+            print(f"  ... {i}s — жду vllm | {', '.join(_diag)} | tail -f {log_path.name}")
         if is_vllm_running(port):
             print(f"  vllm готов (заняло {i + 1} сек)")
             log_file.close()
