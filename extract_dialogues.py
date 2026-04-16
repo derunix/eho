@@ -8462,15 +8462,18 @@ def find_ollama_binary() -> Optional[str]:
 
 def is_vllm_running(port: int = 8000) -> bool:
     """Проверяет, отвечает ли vllm OpenAI-совместимый сервер на указанном порту."""
-    try:
-        req = urllib.request.Request(
-            f"http://localhost:{port}/health",
-            method="GET",
-        )
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
+    for host in ("127.0.0.1", "localhost"):
+        try:
+            req = urllib.request.Request(
+                f"http://{host}:{port}/health",
+                method="GET",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status == 200:
+                    return True
+        except Exception:
+            continue
+    return False
 
 
 def ensure_vllm(
@@ -8529,6 +8532,8 @@ def ensure_vllm(
             print(f"  vllm завершился с кодом {process.returncode}")
             print(f"  Подробности: {log_path.resolve()}")
             exit(1)
+        if i > 0 and i % 15 == 0:
+            print(f"  ... {i}s — жду vllm (tail -f {log_path.name})")
         if is_vllm_running(port):
             print(f"  vllm готов (заняло {i + 1} сек)")
             log_file.close()
