@@ -8678,10 +8678,10 @@ def main() -> int:
     parser.add_argument("--no-resume", action="store_true",
                         help="Не пропускать уже обработанные книги, начать заново")
     parser.add_argument("--workers", type=int, default=4,
-                        help="Количество параллельных воркеров на книгу (по умолчанию 4; для vllm на RTX 5090 рекомендуется 16)")
+                        help="Количество параллельных воркеров на книгу (по умолчанию 4; для vllm на RTX 5070 рекомендуется 8)")
     parser.add_argument("--parallel-books", type=int, default=1,
                         help="Сколько книг обрабатывать одновременно (по умолчанию 1; "
-                             "для vllm на RTX 5090 рекомендуется 4, workers делятся между книгами)")
+                             "для vllm на RTX 5070 рекомендуется 2, workers делятся между книгами)")
     parser.add_argument("--voice-extractor", choices=("regex", "llm"), default="regex",
                         help="Чем извлекать голос Макса: быстрым regex или LLM (по умолчанию regex)")
     parser.add_argument("--knowledge-protocol", choices=("lines", "json"), default="lines",
@@ -8716,11 +8716,12 @@ def main() -> int:
                              "Пример: Qwen/Qwen2.5-14B-Instruct")
     parser.add_argument("--vllm-port", type=int, default=8000,
                         help="Порт vllm сервера (по умолчанию 8000)")
-    parser.add_argument("--vllm-gpu-util", type=float, default=0.90,
-                        help="Доля VRAM для vllm, 0.0–1.0 (по умолчанию 0.90)")
-    parser.add_argument("--vllm-max-seqs", type=int, default=32,
+    parser.add_argument("--vllm-gpu-util", type=float, default=0.85,
+                        help="Доля VRAM для vllm, 0.0–1.0 (по умолчанию 0.85; "
+                             "RTX 5070 11.9 GB → ~10 GB под модель+KV cache)")
+    parser.add_argument("--vllm-max-seqs", type=int, default=16,
                         help="max-num-seqs для vllm — макс. одновременных запросов "
-                             "(по умолчанию 32; RTX 5090 тянет 32+)")
+                             "(по умолчанию 16; RTX 5070 11.9 GB: 7B Q4 ~5 GB веса → ~6 GB KV)")
     parser.add_argument("--vllm-extra-args", default="",
                         help="Дополнительные аргументы для vllm через пробел, "
                              "например: '--dtype bfloat16 --max-model-len 32768'")
