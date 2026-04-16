@@ -8462,30 +8462,17 @@ def find_ollama_binary() -> Optional[str]:
 
 def is_vllm_running(port: int = 8000) -> bool:
     """
-    Проверяет, принимает ли vllm соединения на порту.
-    Сначала TCP-сокетом (надёжно в Docker/vastai), потом HTTP /health.
+    Проверяет, принимает ли vllm TCP-соединения на порту.
+    HTTP-проверку не используем: urllib зависает на keep-alive ответах uvicorn.
     """
     import socket as _socket
-    for host in ("127.0.0.1", "0.0.0.0", "localhost"):
-        # 1. TCP-порт открыт?
+    for host in ("127.0.0.1", "localhost"):
         try:
             s = _socket.create_connection((host, port), timeout=2)
             s.close()
+            return True
         except OSError:
             continue
-        # 2. HTTP /health возвращает 200?
-        try:
-            req = urllib.request.Request(
-                f"http://{host}:{port}/health",
-                method="GET",
-            )
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                if resp.status == 200:
-                    return True
-        except Exception:
-            pass
-        # TCP открыт, но /health ещё не отвечает — считаем не готовым
-        return False
     return False
 
 
