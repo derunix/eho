@@ -160,6 +160,7 @@ class Config:
     knowledge_arbiter_model: str = ""
     knowledge_ensemble_low_fact_threshold: int = 2
     knowledge_ensemble_drop_ratio_threshold: float = 0.7
+    knowledge_ensemble_uncovered_glossary_threshold: int = 2
     max_tokens_knowledge_arbiter: int = 700
     knowledge_llm_validation_enabled: bool = True
     knowledge_validate_model: str = ""
@@ -3364,6 +3365,9 @@ def make_knowledge_pagination_note(pass_idx: int, extracted: list[dict], track_n
     return (
         f"\n\nЭТО ПРОХОД #{pass_idx + 1}{track_hint}. Ниже уже найденные факты, их повторять нельзя.\n"
         "Найди НОВЫЕ факты и события из PRIMARY CHUNK, которые ещё не попали в список.\n"
+        "Особенно проверь, не пропущены ли короткие именованные факты по названиям из SCENE GLOSSARY:\n"
+        "дома и трактиры, ордена и институты, магические термины, напитки, одежда, транспорт,\n"
+        "а также короткие relation/status facts вроде `X женат на Y`, `X был ...`, `X больше не действует`.\n"
         "УЖЕ ИЗВЛЕЧЕНО:\n"
         f"{already}"
     )
@@ -5249,6 +5253,12 @@ Time scope:
 - Если рассказчик говорит от первого лица, не пиши псевдоэнциклопедию вроде `Макс — персонаж, который...`. Пиши прямой факт: `Макс не мог спать по ночам с детства.`
 - Fact должен быть автономным утверждением, полезным вне одной реплики или одной микросцены.
 - Fact должен быть сфокусирован на своём subject. Для `character`, `creature`, `magic`, `event` нормальная строка начинается с subject или сразу с конструкции про него. Если subject=`Макс`, нельзя писать факт, начинающийся с `Сэр Джуффин ...`, даже если дальше там встречается Макс.
+- Перед завершением ответа быстро перепроверь короткие, но ценные named facts:
+  дома/трактиры/крепости, ордена и институты, магические термины, напитки, одежду, транспорт,
+  а также компактные relation/status facts вроде `X женат на Y`, `X был ...`, `X больше не действует`, `в X невозможно ...`.
+- Если названия из SCENE GLOSSARY не попали ни в одну строку, перепроверь, нет ли там самостоятельного
+  `place/custom/magic/history` факта. Короткие факты вроде `Мохнатый Дом`, `Обжора Бунба`, `Холоми`,
+  `Кодекс Хрембера`, `камра`, `лоохи`, `амобилер` важнее, чем размытый summary.
 - Не пиши summary-абстракции вроде `курс адаптации`, `осваивается в новом мире`, `помощь в трудоустройстве`, `катализатор изменений`, `место действия`.
 - Не пиши сценические пересказы и реплики-пересказы вроде `Сэр Шурф унес Мелифаро под мышкой`, `Макс заявил, что будет коллекционировать амобилеры`, `Мелифаро назвал Макса своим главным спасителем`.
 - Если фраза звучит как пересказ темы эпизода, а не как проверяемое знание о мире, персонаже или событии, не извлекай её.
@@ -5301,6 +5311,12 @@ KNOWLEDGE_PROMPT_V2 = """Из фрагмента книги Макса Фрая 
 - Если в тексте нет более точного полного имени рассказчика, используй subject "Макс".
 - SUPPORTING CONTEXT и SCENE GLOSSARY используй только для именования, местоимений и атрибуции. Они не добавляют новых фактов.
 - Fact должен быть самодостаточным утверждением, которое имеет смысл отдельно от сцены. Если фраза похожа на summary, комментарий о сцене или догадку модели, пропусти её.
+- Перед завершением ответа перепроверь короткие named facts, которые модели часто теряют:
+  дома/трактиры/крепости, ордена и институты, магические термины, напитки, одежду, транспорт,
+  а также relation/status facts вроде `X женат на Y`, `X был ...`, `X больше не действует`, `в X невозможно ...`.
+- Если названия из SCENE GLOSSARY не покрыты фактами, перепроверь, нет ли самостоятельного
+  `place/custom/magic/history` факта. Короткие факты вроде `Мохнатый Дом`, `Обжора Бунба`, `Холоми`,
+  `Кодекс Хрембера`, `камра`, `лоохи`, `амобилер` лучше сохранить отдельной записью, чем потерять в summary.
 - Не добавляй факт, если он содержит неопределённость или мета-комментарий: `видимо`, `вероятно`, `возможно`, `может быть`, `предполагается`, `упоминается в контексте`, `не раскрывается`, `в тексте не упоминается`, `в данном отрывке`.
 - Если книга написана от первого лица, НЕ превращай фразы в псевдоэнциклопедию вида `Макс — персонаж, который...`. Переписывай их как прямой факт: `Макс не мог спать по ночам`, `Макс родом из другого мира`, `Кимпа был гонщиком`.
 - Для `character` предпочитай устойчивые свойства, происхождение, роли, отношения, навыки и значимые решения. Не сохраняй просто факт говорения: `Джуффин сообщил`, `Меламори сказала`, `Макс рассказал`.
@@ -5509,32 +5525,54 @@ def should_run_secondary_knowledge_extraction(
     config: Config,
     primary_items: list[dict],
     primary_stats: dict,
-) -> bool:
+    *,
+    chunk_payload: str = "",
+) -> tuple[bool, str]:
     """Решает, стоит ли звать вторую extractor-модель на подозрительном чанке."""
     if not getattr(config, "knowledge_dual_extraction_enabled", False):
-        return False
+        return False, ""
     secondary_model = strip_text(getattr(config, "knowledge_extract_model_secondary", ""))
     if not secondary_model:
-        return False
+        return False, ""
     primary_model = (
         strip_text(getattr(config, "knowledge_extract_model", ""))
         or strip_text(getattr(config, "model", ""))
     )
     if primary_model and normalize_dedup_text(primary_model) == normalize_dedup_text(secondary_model):
-        return False
+        return False, ""
 
     final_items = len(primary_items)
     if final_items <= max(getattr(config, "knowledge_ensemble_low_fact_threshold", 0), 0):
-        return True
-    if int(primary_stats.get("format_failures", 0)) > 0:
-        return True
+        return True, f"low_fact_count={final_items}"
+
+    format_failures = int(primary_stats.get("format_failures", 0))
+    if format_failures > 0:
+        return True, f"format_failures={format_failures}"
 
     candidate_items = int(primary_stats.get("candidate_items", 0))
     if candidate_items <= 0:
-        return False
+        return False, ""
 
     drop_ratio = 1.0 - (final_items / max(candidate_items, 1))
-    return drop_ratio >= float(getattr(config, "knowledge_ensemble_drop_ratio_threshold", 1.0))
+    if drop_ratio >= float(getattr(config, "knowledge_ensemble_drop_ratio_threshold", 1.0)):
+        return True, f"drop_ratio={drop_ratio:.2f}"
+
+    glossary_threshold = max(
+        int(getattr(config, "knowledge_ensemble_uncovered_glossary_threshold", 0)),
+        0,
+    )
+    if glossary_threshold > 0 and chunk_payload:
+        uncovered_entries = find_uncovered_high_signal_glossary_entries(
+            chunk_payload,
+            primary_items,
+        )
+        if len(uncovered_entries) >= glossary_threshold:
+            preview = ", ".join(value for _, value in uncovered_entries[:3])
+            if len(uncovered_entries) > 3:
+                preview += f", +{len(uncovered_entries) - 3} ещё"
+            return True, f"uncovered_glossary={preview}"
+
+    return False, ""
 
 
 def extract_knowledge(
@@ -5561,13 +5599,19 @@ def extract_knowledge(
         model_tag="",
     )
 
-    if not should_run_secondary_knowledge_extraction(config, primary_items, primary_stats):
+    run_secondary, secondary_reason = should_run_secondary_knowledge_extraction(
+        config,
+        primary_items,
+        primary_stats,
+        chunk_payload=payload,
+    )
+    if not run_secondary:
         return [strip_internal_knowledge_fields(item) for item in primary_items]
 
     secondary_model = get_model_for_role(config, "knowledge_extract_secondary")
     if log_prefix:
         log_event(
-            f"{log_prefix}[ensemble] подозрительный чанк: primary={len(primary_items)} "
+            f"{log_prefix}[ensemble] подозрительный чанк ({secondary_reason}): primary={len(primary_items)} "
             f"(candidate={primary_stats.get('candidate_items', 0)}, format_failures={primary_stats.get('format_failures', 0)}), "
             f"запускаю secondary={secondary_model}"
         )
@@ -5845,16 +5889,27 @@ _PLACE_HEADWORD_CANONICAL = {
 _SCENE_GLOSSARY_WORLD_TERMS = {
     "Ехо": ("place", ("ехо",)),
     "Дом у Моста": ("place", ("дом у моста", "дома у моста")),
+    "Мохнатый Дом": ("place", ("мохнатый дом", "мохнатом доме", "мохнатого дома")),
+    "Обжора Бунба": ("place", ("обжора бунба", "обжоры бунбы", "обжору бунба", "обжоре бунба")),
+    "Холоми": ("place", ("холоми",)),
+    "Хумгат": ("place", ("хумгат", "хумгате")),
     "Старый Город": ("place", ("старый город",)),
     "Тихий Город": ("place", ("тихий город",)),
     "Тёмная Сторона": ("magic", ("темная сторона", "тёмная сторона")),
+    "Смутные Времена": ("history", ("смутные времена",)),
     "Кодекс Хрембера": ("history", ("кодекс хрембера",)),
+    "Орден Семилистника": ("custom", ("орден семилистника", "ордена семилистника")),
+    "Орден Водяной Вороны": ("custom", ("орден водяной вороны", "ордена водяной вороны")),
+    "Орден Дырявой Чаши": ("custom", ("орден дырявой чаши", "ордена дырявой чаши")),
+    "Орден Ледяной Руки": ("custom", ("орден ледяной руки", "ордена ледяной руки")),
     "Тайный Сыск": ("custom", ("тайный сыск",)),
+    "Тайное Сыскное Войско": ("custom", ("тайное сыскное войско",)),
     "Королевский голос": ("custom", ("королевский голос",)),
     "камра": ("custom", ("камра", "камру", "камры", "камрой")),
     "лоохи": ("custom", ("лоохи", "лоохи", "лоохи")),
     "амобилер": ("custom", ("амобилер", "амобилеры")),
     "Безмолвная речь": ("magic", ("безмолвная речь",)),
+    "Перчатки Смерти": ("magic", ("перчатки смерти",)),
     "Смертный Шар": ("magic", ("смертный шар",)),
 }
 
@@ -5990,6 +6045,88 @@ def build_scene_glossary(text: str, limit: int = 16) -> str:
             break
 
     return "\n".join(lines)
+
+
+def parse_scene_glossary_entries(chunk_payload: str) -> list[tuple[str, str]]:
+    """Достаёт пары (label, value) из блока [SCENE GLOSSARY] extraction-payload'а."""
+    if not chunk_payload or "[SCENE GLOSSARY]" not in chunk_payload:
+        return []
+
+    match = re.search(
+        r"\[SCENE GLOSSARY\]\s*\n(.*?)(?=\n\s*\[[^\]]+\]|\Z)",
+        chunk_payload,
+        flags=re.DOTALL,
+    )
+    if not match:
+        return []
+
+    entries: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for raw_line in match.group(1).splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parsed = re.match(r"^-\s*([a-z_]+)\s*:\s*(.+?)\s*$", line, flags=re.IGNORECASE)
+        if not parsed:
+            continue
+        label = strip_text(parsed.group(1)).lower()
+        value = strip_text(parsed.group(2))
+        if not label or not value:
+            continue
+        key = f"{label}:{normalize_subject_for_dedup(value)}"
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append((label, value))
+    return entries
+
+
+def scene_glossary_entry_is_high_signal(label: str, value: str) -> bool:
+    """Оставляет только glossary-термины, которые полезны как сигнал неполного extraction."""
+    normalized_label = strip_text(label).lower()
+    if normalized_label not in {"place", "magic", "history", "custom"}:
+        return False
+    normalized_value = normalize_subject_for_dedup(value)
+    return len(normalized_value) >= 4 and not is_placeholder_subject(value, normalized_label)
+
+
+def knowledge_item_covers_glossary_entry(item: dict, label: str, value: str) -> bool:
+    """Понимает, что glossary-термин уже отражён в извлечённом факте."""
+    if not isinstance(item, dict):
+        return False
+
+    subject = strip_text(item.get("subject", ""))
+    fact = strip_text(item.get("fact", ""))
+    if not subject and not fact:
+        return False
+
+    if subjects_look_duplicate(subject, value):
+        return True
+
+    target = normalize_subject_for_dedup(value)
+    if not target:
+        return False
+
+    fact_norm = f" {normalize_dedup_text(fact)} "
+    return f" {target} " in fact_norm
+
+
+def find_uncovered_high_signal_glossary_entries(
+    chunk_payload: str,
+    items: list[dict],
+) -> list[tuple[str, str]]:
+    """Ищет значимые glossary-термины, которые primary extraction никак не покрыл."""
+    uncovered: list[tuple[str, str]] = []
+    primary_chunk = extract_primary_chunk_text(chunk_payload)
+    for label, value in parse_scene_glossary_entries(chunk_payload):
+        if not scene_glossary_entry_is_high_signal(label, value):
+            continue
+        if primary_chunk and not subject_tokens_grounded_in_source(value, primary_chunk, label):
+            continue
+        if any(knowledge_item_covers_glossary_entry(item, label, value) for item in items):
+            continue
+        uncovered.append((label, value))
+    return uncovered
 
 
 def infer_time_scope_from_fact(fact: str, category: str = "") -> str:

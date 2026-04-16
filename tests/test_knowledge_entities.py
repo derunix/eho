@@ -438,6 +438,8 @@ class KnowledgeEntityResolutionTest(unittest.TestCase):
         self.assertIn('Кимпа — Кимпа был гонщиком', ed.KNOWLEDGE_PROMPT_V2)
         self.assertIn('Джуффин Халли сообщил, что обнаружил невидимое чудо', ed.KNOWLEDGE_PROMPT_V2)
         self.assertIn('Fact должен быть сфокусирован на своём subject', ed.KNOWLEDGE_LINE_PROMPT_V3)
+        self.assertIn('Перед завершением ответа быстро перепроверь короткие, но ценные named facts', ed.KNOWLEDGE_LINE_PROMPT_V3)
+        self.assertIn('Мохнатый Дом', ed.KNOWLEDGE_LINE_PROMPT_V3)
         self.assertIn('Сэр Шурф унес Мелифаро под мышкой', ed.KNOWLEDGE_LINE_PROMPT_V3)
         self.assertIn('Макс заявил, что будет коллекционировать амобилеры', ed.KNOWLEDGE_LINE_PROMPT_V3)
         self.assertIn('keep', ed.KNOWLEDGE_VALIDATE_PROMPT)
@@ -458,6 +460,41 @@ class KnowledgeEntityResolutionTest(unittest.TestCase):
         self.assertIn("- place: Дом у Моста", glossary)
         self.assertIn("- custom: камра", glossary)
         self.assertIn("- place: улица Желтых Камней", glossary)
+
+    def test_build_scene_glossary_collects_benchmark_entities(self):
+        glossary = ed.build_scene_glossary(
+            "Макс вернулся в Мохнатый Дом, заказал ужин из «Обжоры Бунбы» "
+            "и вспомнил, что Кодекс Хрембера больше не действует. "
+            "Шурф как-то говорил, что в Холоми невозможно колдовать."
+        )
+
+        self.assertIn("- place: Мохнатый Дом", glossary)
+        self.assertIn("- place: Обжора Бунба", glossary)
+        self.assertIn("- history: Кодекс Хрембера", glossary)
+        self.assertIn("- place: Холоми", glossary)
+
+    def test_find_uncovered_high_signal_glossary_entries_returns_uncovered_terms(self):
+        chunk_payload = (
+            "[PRIMARY CHUNK]\n"
+            "Макс вернулся в Мохнатый Дом и заказал ужин из «Обжоры Бунбы».\n\n"
+            "[SCENE GLOSSARY]\n"
+            "- place: Мохнатый Дом\n"
+            "- place: Обжора Бунба\n"
+            "- custom: камра\n"
+        )
+        items = [
+            {
+                "category": "custom",
+                "subject": "камра",
+                "fact": "Камра — горячий напиток Ехо.",
+            }
+        ]
+
+        uncovered = ed.find_uncovered_high_signal_glossary_entries(chunk_payload, items)
+
+        self.assertIn(("place", "Мохнатый Дом"), uncovered)
+        self.assertIn(("place", "Обжора Бунба"), uncovered)
+        self.assertNotIn(("custom", "камра"), uncovered)
 
     def test_validate_knowledge_infers_time_scope(self):
         validated = ed.validate_knowledge([

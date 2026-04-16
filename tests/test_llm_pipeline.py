@@ -449,6 +449,79 @@ class LLMExtractionPipelineSmokeTest(unittest.TestCase):
         self.assertEqual(calls["arbiter"], 0)
         self.assertEqual(len(result), 3)
 
+    def test_extract_knowledge_runs_secondary_when_glossary_terms_are_uncovered(self):
+        config = ed.Config(
+            extraction_passes=1,
+            knowledge_extraction_tracks=("world",),
+        )
+        config.knowledge_llm_validation_enabled = False
+        config.knowledge_extract_model = "primary-model"
+        config.knowledge_dual_extraction_enabled = True
+        config.knowledge_extract_model_secondary = "secondary-model"
+        config.knowledge_arbiter_model = "arbiter-model"
+        config.knowledge_ensemble_low_fact_threshold = 0
+        config.knowledge_ensemble_drop_ratio_threshold = 1.0
+        config.knowledge_ensemble_uncovered_glossary_threshold = 2
+
+        calls = {
+            "primary": 0,
+            "secondary": 0,
+            "arbiter": 0,
+        }
+
+        chunk = (
+            "Дом у Моста служит штабом Тайного Сыска. "
+            "Макс не мог спать по ночам с детства. "
+            "Кодекс Хрембера больше не действует. "
+            "Амобилеры ездят на магических кристаллах."
+        )
+        chunk_payload = (
+            "[PRIMARY CHUNK]\n"
+            f"{chunk}\n\n"
+            "[SCENE GLOSSARY]\n"
+            "- place: Дом у Моста\n"
+            "- history: Кодекс Хрембера\n"
+            "- custom: амобилер\n"
+        )
+
+        def fake_call_llm(client, config, system, user, **kwargs):
+            model_override = kwargs.get("model_override")
+            if system == ed.KNOWLEDGE_ARBITER_SYSTEM:
+                calls["arbiter"] += 1
+                self.assertIn("Кодекс Хрембера", user)
+                self.assertIn("амобилер", user)
+                return "1 keep\n2 keep"
+            if model_override == "primary-model":
+                calls["primary"] += 1
+                return "\n".join([
+                    "category=place | subject=Дом у Моста | fact=Дом у Моста служит штабом Тайного Сыска. | time_scope=timeless",
+                    "category=character | subject=Макс | fact=Макс не мог спать по ночам с детства. | time_scope=past",
+                    "category=custom | subject=Тайный Сыск | fact=Тайный Сыск расследует магические преступления. | time_scope=timeless",
+                ])
+            if model_override == "secondary-model":
+                calls["secondary"] += 1
+                return "\n".join([
+                    "category=history | subject=Кодекс Хрембера | fact=Кодекс Хрембера больше не действует. | time_scope=ended",
+                    "category=custom | subject=амобилер | fact=Амобилеры ездят на магических кристаллах. | time_scope=timeless",
+                ])
+            self.fail(f"Unexpected LLM call: {system[:60]} / {model_override}")
+
+        with mock.patch.object(ed, "call_llm", side_effect=fake_call_llm):
+            result = ed.extract_knowledge(
+                client=object(),
+                config=config,
+                chunk=chunk,
+                chunk_payload=chunk_payload,
+                log_prefix="[test-glossary-secondary]",
+            )
+
+        self.assertEqual(calls["primary"], 1)
+        self.assertEqual(calls["secondary"], 1)
+        self.assertEqual(calls["arbiter"], 1)
+        subjects = {item["subject"] for item in result}
+        self.assertIn("Кодекс Хрембера", subjects)
+        self.assertIn("амобилер", subjects)
+
     def test_arbiter_can_rewrite_candidate_into_autonomous_fact(self):
         config = ed.Config()
         config.knowledge_arbiter_model = "arbiter-model"

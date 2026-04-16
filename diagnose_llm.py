@@ -13,10 +13,12 @@
   python diagnose_llm.py --models gemma4:e4b qwen3:8b   # конкретные модели
   python diagnose_llm.py --group A                # только группа A
   python diagnose_llm.py --group C                # CPU-offload (отдельное ранжирование)
+  python diagnose_llm.py --group 4090             # RTX 4090 server suite (10 моделей, Tier S/1/2/3)
+  python diagnose_llm.py --group 4090 --cost-per-hour 0.656  # с учётом стоимости Vast.ai (48 GB)
   python diagnose_llm.py --include-failed         # перетестировать ранее провалившиеся
   python diagnose_llm.py --ensemble               # ensemble top-3 после single-model
   python diagnose_llm.py --kv-cache-test          # тест KV cache / flash attention
-  python diagnose_llm.py --context-test           # тест num_ctx для top-2
+  python diagnose_llm.py --context-test           # тест num_ctx (2048/4096/8192/16384)
   python diagnose_llm.py --loq-test               # тест Баланс vs Производительность
   python diagnose_llm.py --all                    # все тесты
 
@@ -53,6 +55,9 @@ EST_CHUNKS_PER_BOOK = 120
 # RTX 4050 Laptop theoretical decode ceiling для 8B Q4 (для decode_efficiency)
 THEORETICAL_DECODE_CEILING_TOKS = 55.0
 
+# Стоимость аренды сервера ($/час). Устанавливается через --cost-per-hour.
+COST_PER_HOUR_USD = 0.0
+
 
 # ──────────────────────────────────────────────
 # Модели
@@ -87,6 +92,23 @@ MODELS: list[ModelSpec] = [
     ModelSpec("gemma3:12b",    "C", "12B",     "12B",  8.0, "prev gen, dense, offload"),
     ModelSpec("qwen3:14b",     "C", "14B",     "14B",  9.0, "dense, offload"),
     ModelSpec("gemma4:31b",    "C", "31B",     "31B", 18.0, "dense, heavy offload, quality upper bound"),
+
+    # Группа 4090 — RTX 4090 48 GB VRAM (сервер Vast.ai, $0.656/h)
+    # 48 GB позволяет 70B Q4_K_M (~40–43 GB) целиком и 32B Q8_0 (~33–35 GB).
+    # Tier S: 70B dense — потолок качества для consumer GPU
+    ModelSpec("qwen3:72b",                         "4090", "72B",     "72B",  43.0, "TierS: top open-source, сильный русский, ~15-25 tok/s"),
+    ModelSpec("llama3.3:70b",                      "4090", "70B",     "70B",  40.0, "TierS: Meta Llama 3.3, надёжный instruction-follower"),
+    ModelSpec("qwen2.5:72b",                       "4090", "72B",     "72B",  43.0, "TierS: предыдущее поколение Qwen, проверенный русский"),
+    # Tier 1: 31-32B dense, целиком в GPU (Q4_K_M ~20-22 GB, Q8_0 ~33-35 GB)
+    ModelSpec("gemma4:31b",                        "4090", "31B",     "31B",  20.0, "Tier1: #3 Arena AI, ~40-50 tok/s, попробовать Q8 если VRAM не занят 70B"),
+    ModelSpec("huihui_ai/gemma-4-abliterated:31b", "4090", "31B",     "31B",  20.0, "Tier1: abliterated gemma4:31b, no safety refusals"),
+    ModelSpec("qwen3:32b",                         "4090", "32B",     "32B",  22.0, "Tier1: сильный русский, ~22 GB Q4_K_M"),
+    ModelSpec("deepseek-r1:32b",                   "4090", "32B",     "32B",  20.0, "Tier1: reasoning/CoT, тест с think=False для fair compare"),
+    # Tier 2: MoE — максимальная скорость, все эксперты в VRAM
+    ModelSpec("gemma4:26b",                        "4090", "26B MoE", "3.8B", 16.0, "Tier2: 71% hit rate на ноутбуке, ~80-120 tok/s на 4090"),
+    ModelSpec("qwen3-coder:30b",                   "4090", "30B MoE", "3.3B", 18.0, "Tier2: coding MoE, RL-trained reasoning"),
+    # Tier 3: lower bound (reference)
+    ModelSpec("gemma4:e2b",                        "4090", "5B MoE",  "2.3B",  3.0, "Tier3: ноутбучный чемпион, lower bound, ~80-120+ tok/s"),
 ]
 
 
@@ -407,7 +429,11 @@ category=... | subject=... | fact=... | time_scope=...
 Пример хороших строк:
 category=character | subject=Кимпа | fact=Кимпа был гонщиком, прежде чем стать дворецким Джуффина. | time_scope=past
 category=place | subject=Дом у Моста | fact=Дом у Моста служит штабом Тайного Сыска. | time_scope=timeless
+category=place | subject=Мохнатый Дом | fact=Мохнатый Дом — дом Макса с башней на крыше. | time_scope=timeless
+category=place | subject=Обжора Бунба | fact=Обжора Бунба — известная забегаловка Ехо. | time_scope=timeless
 category=magic | subject=Безмолвная речь | fact=Безмолвная речь является обычным способом общения на расстоянии. | time_scope=timeless
+category=history | subject=Кодекс Хрембера | fact=Кодекс Хрембера больше не действует. | time_scope=ended
+category=place | subject=Холоми | fact=В Холоми невозможно колдовать. | time_scope=timeless
 category=event | subject=Макс | fact=Макс впервые прибывает в Ехо. | time_scope=past
 category=custom | subject=камра | fact=Камра — горький горячий напиток, популярный в Ехо. | time_scope=timeless
 
@@ -432,6 +458,11 @@ Time scope:
 - PRECISION FIRST: лучше вернуть меньше строк, чем мусор.
 - Используй только факты, явно подтверждённые PRIMARY CHUNK.
 - Subject должен быть полным и естественным. Не обрезай названия.
+- Перед завершением ответа перепроверь короткие named facts, которые модели часто теряют:
+  дома и трактиры, ордена и институты, магические термины, напитки, одежду, транспорт,
+  а также relation/status facts вроде `X женат на Y`, `X был ...`, `X больше не действует`, `в X невозможно ...`.
+- Не пропускай короткие, но полезные факты только потому, что они выражены в 1-2 именованных словах:
+  `Мохнатый Дом`, `Обжора Бунба`, `Холоми`, `Кодекс Хрембера`, `камра`, `лоохи`, `амобилер`.
 - Не пиши summary-абстракции вроде «курс адаптации», «место действия».
 - Не пиши сценические пересказы и реплики-пересказы.
 - Не используй символ | внутри значений полей.
@@ -641,9 +672,21 @@ def ollama_list_models() -> list[str]:
 
 
 def ollama_pull(model: str) -> bool:
+    # Timeout: 70B models ~43GB can take 30-60 min on slow connections
+    timeout = 3600
     try:
-        subprocess.run(["ollama", "pull", model], check=True, timeout=600, capture_output=True)
+        subprocess.run(
+            ["ollama", "pull", model],
+            check=True,
+            timeout=timeout,
+        )
         return True
+    except subprocess.CalledProcessError as e:
+        print(f"  [WARN] Failed to pull {model}: exit status {e.returncode}")
+        return False
+    except subprocess.TimeoutExpired:
+        print(f"  [WARN] Pull timed out after {timeout}s for {model}")
+        return False
     except Exception as e:
         print(f"  [WARN] Failed to pull {model}: {e}")
         return False
@@ -717,6 +760,52 @@ def extract_llm_metrics(resp: dict) -> dict:
         "effective_time_sec": round(effective_time_sec, 3),
         "decode_efficiency": round(decode_efficiency, 3),
     }
+
+
+def ensure_ollama_running():
+    """Проверяет что ollama запущен. Если нет — запускает с нужными env vars и ждёт готовности."""
+    # Check if already running
+    try:
+        ollama_api("/api/tags", timeout=5)
+        print("ollama: already running")
+        return
+    except Exception:
+        pass
+
+    print("ollama: not running, starting with FLASH_ATTENTION=1 KV_CACHE=q8_0 ...")
+    env = os.environ.copy()
+    env["OLLAMA_FLASH_ATTENTION"] = "1"
+    env["OLLAMA_KV_CACHE_TYPE"] = "q8_0"
+    env["OLLAMA_NUM_PARALLEL"] = "1"
+    env["OLLAMA_MAX_LOADED_MODELS"] = "1"
+
+    log_path = Path("/tmp/ollama_serve.log")
+    log_fh = open(log_path, "w")
+    try:
+        subprocess.Popen(
+            ["ollama", "serve"],
+            env=env,
+            stdout=log_fh,
+            stderr=log_fh,
+            start_new_session=True,
+        )
+    except FileNotFoundError:
+        print("ERROR: 'ollama' not found in PATH. Install: curl -fsSL https://ollama.com/install.sh | sh")
+        sys.exit(1)
+
+    # Wait up to 30s for ollama to accept connections
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        time.sleep(1)
+        try:
+            ollama_api("/api/tags", timeout=3)
+            print(f"ollama: ready (log: {log_path})")
+            return
+        except Exception:
+            pass
+
+    print(f"ERROR: ollama did not start within 30s. Check {log_path}")
+    sys.exit(1)
 
 
 def warmup_model(model: str):
@@ -1003,6 +1092,8 @@ class ModelResult:
     quality_speed_score: float = 0.0
     quality_score: float = 0.0
     efficiency_score: float = 0.0
+    cost_per_book_usd: float = 0.0
+    cost_per_corpus_usd: float = 0.0
 
     def compute_aggregates(self):
         if not self.cases:
@@ -1032,6 +1123,10 @@ class ModelResult:
         vram_peak = self.gpu_metrics.get("vram_used_peak_mb", 0)
         if vram_peak and vram_peak > 0 and self.quality_speed_score > 0:
             self.efficiency_score = self.quality_speed_score / vram_peak * 1000
+
+        if COST_PER_HOUR_USD > 0:
+            self.cost_per_book_usd = (self.avg_time_sec * EST_CHUNKS_PER_BOOK / 3600) * COST_PER_HOUR_USD
+            self.cost_per_corpus_usd = self.cost_per_book_usd * 32
 
 
 # ──────────────────────────────────────────────
@@ -1268,7 +1363,7 @@ def run_context_test(top_models: list[ModelResult], cases: list[TestCase]):
     print("CONTEXT WINDOW TEST (num_ctx)")
     print(f"{'='*60}")
 
-    ctx_sizes = [2048, 4096, 8192]
+    ctx_sizes = [2048, 4096, 8192, 16384]
     subset = cases[:3]
 
     for mr in top_models[:2]:
@@ -1350,25 +1445,29 @@ def _fmt(val, fmt=".1f", fallback="n/a"):
 
 def print_table1_summary(results: list[ModelResult]):
     """Таблица 1: Сводка по моделям."""
-    print(f"\n{'='*140}")
+    show_cost = COST_PER_HOUR_USD > 0
+    width = 160 if show_cost else 140
+    print(f"\n{'='*width}")
     print("TABLE 1: MODEL SUMMARY (sorted by quality_speed_score)")
-    print(f"{'='*140}")
+    print(f"{'='*width}")
 
     sorted_r = sorted(results, key=lambda r: r.quality_speed_score, reverse=True)
 
     header = (
-        f"{'Model':<22} {'Params':<10} {'Offload':>8} {'Bottleneck':<18} "
+        f"{'Model':<32} {'Params':<10} {'Offload':>8} {'Bottleneck':<18} "
         f"{'Hit%':>5} {'Prec%':>6} {'Fmt%':>5} "
         f"{'eval t/s':>9} {'pfill t/s':>10} "
         f"{'Sec/case':>9} {'VRAM peak':>10} "
         f"{'ETA(h)':>7} {'QS score':>9}"
     )
+    if show_cost:
+        header += f" {'$/book':>7} {'$/corpus':>9}"
     print(header)
-    print("-" * 140)
+    print("-" * width)
 
     for r in sorted_r:
         if not r.cases:
-            print(f"{r.model:<22} SKIPPED")
+            print(f"{r.model:<32} SKIPPED")
             continue
 
         offload = r.model_info.get("offload_ratio")
@@ -1376,13 +1475,16 @@ def print_table1_summary(results: list[ModelResult]):
         vram_peak = r.gpu_metrics.get("vram_used_peak_mb")
         vram_str = f"{vram_peak:.0f}MB" if vram_peak else "?"
 
-        print(
-            f"{r.model:<22} {r.spec.params_total:<10} {offload_str:>8} {r.bottleneck:<18} "
+        row = (
+            f"{r.model:<32} {r.spec.params_total:<10} {offload_str:>8} {r.bottleneck:<18} "
             f"{r.avg_hit_rate:>5.0%} {r.avg_precision:>6.0%} {r.format_reliability:>5.0%} "
             f"{r.avg_eval_rate:>9.1f} {r.avg_prompt_eval_rate:>10.0f} "
             f"{r.avg_time_sec:>9.1f} {vram_str:>10} "
             f"{r.estimated_pipeline_hours:>7.0f} {r.quality_speed_score:>9.4f}"
         )
+        if show_cost:
+            row += f" ${r.cost_per_book_usd:>6.3f} ${r.cost_per_corpus_usd:>8.2f}"
+        print(row)
 
 
 def print_table2_hardware(results: list[ModelResult]):
@@ -1491,21 +1593,26 @@ def print_table4_recommendations(results: list[ModelResult]):
     gpu_only = [r for r in valid if r.model_info.get("offload_ratio", 1.0) >= 0.99]
     gpu_by_qxs = sorted(gpu_only, key=lambda r: r.quality_speed_score, reverse=True) if gpu_only else by_qxs
 
+    def _cost_str(r: ModelResult) -> str:
+        if COST_PER_HOUR_USD > 0:
+            return f", Cost: ${r.cost_per_book_usd:.3f}/book, ${r.cost_per_corpus_usd:.2f}/corpus (32 books)"
+        return ""
+
     print("\n  BEST SINGLE MODEL FOR SPEED (highest Quality×Speed, GPU-only):")
     if gpu_by_qxs:
         r = gpu_by_qxs[0]
         print(f"    PRIMARY_MODEL={r.model}")
-        print(f"    ESTIMATED_HOURS={r.estimated_pipeline_hours:.0f}")
+        print(f"    ESTIMATED_HOURS={r.estimated_pipeline_hours:.1f}")
         print(f"    Hit rate: {r.avg_hit_rate:.0%}, Precision: {r.avg_precision:.0%}")
-        print(f"    Decode: {r.avg_eval_rate:.1f} tok/s, Bottleneck: {r.bottleneck}")
+        print(f"    Decode: {r.avg_eval_rate:.1f} tok/s, Bottleneck: {r.bottleneck}{_cost_str(r)}")
 
     print("\n  BEST SINGLE MODEL FOR QUALITY (highest quality_score):")
     if by_qual:
         r = by_qual[0]
         print(f"    PRIMARY_MODEL={r.model}")
-        print(f"    ESTIMATED_HOURS={r.estimated_pipeline_hours:.0f}")
+        print(f"    ESTIMATED_HOURS={r.estimated_pipeline_hours:.1f}")
         print(f"    Hit rate: {r.avg_hit_rate:.0%}, Precision: {r.avg_precision:.0%}")
-        print(f"    Decode: {r.avg_eval_rate:.1f} tok/s, Bottleneck: {r.bottleneck}")
+        print(f"    Decode: {r.avg_eval_rate:.1f} tok/s, Bottleneck: {r.bottleneck}{_cost_str(r)}")
 
     print("\n  RECOMMENDED MIXED CONFIG:")
     if len(by_qxs) >= 2:
@@ -1520,7 +1627,7 @@ def print_table4_recommendations(results: list[ModelResult]):
             print(f"    SECONDARY_MODEL={second.model}")
             print(f"    ARBITER_MODEL={fast.model}")
         eta = fast.estimated_pipeline_hours_ensemble
-        print(f"    ESTIMATED_HOURS={eta:.0f}")
+        print(f"    ESTIMATED_HOURS={eta:.1f}")
         print(f"    ESTIMATED_QUALITY_VS_BASELINE=better (dual extraction + arbiter)")
 
     # API recommendation
@@ -1591,15 +1698,10 @@ def build_json_report(results: list[ModelResult], vram_baseline: float, tag: str
         "benchmark_meta": {
             "timestamp": datetime.now().isoformat(),
             "vram_baseline_used_mb": vram_baseline,
-            "system": {
-                "gpu": "NVIDIA GeForce RTX 4050 Laptop 6GB",
-                "cpu": "13th Gen Intel Core i7-13650HX",
-                "ram_gb": 64,
-                "disk": "2x Samsung NVMe SSD 3.64TB",
-            },
             "tag": tag,
             "est_chunks_per_book": EST_CHUNKS_PER_BOOK,
             "theoretical_decode_ceiling_toks": THEORETICAL_DECODE_CEILING_TOKS,
+            "cost_per_hour_usd": COST_PER_HOUR_USD,
         },
         "models": {},
     }
@@ -1630,6 +1732,8 @@ def build_json_report(results: list[ModelResult], vram_baseline: float, tag: str
                 "quality_speed_score": round(mr.quality_speed_score, 6),
                 "quality_score": round(mr.quality_score, 6),
                 "efficiency_score": round(mr.efficiency_score, 6),
+                "cost_per_book_usd": round(mr.cost_per_book_usd, 4),
+                "cost_per_corpus_usd": round(mr.cost_per_corpus_usd, 4),
             },
             "cases": [],
         }
@@ -1688,7 +1792,10 @@ def main():
     parser.add_argument("--models", nargs="+", default=[],
                         help="Explicit model names to test")
     parser.add_argument("--group", nargs="+", default=["A", "B"],
-                        help="Model groups (A, B, C, D)")
+                        help="Model groups (A, B, C, 4090). Use 4090 for RTX 4090 server suite.")
+    parser.add_argument("--cost-per-hour", type=float, default=0.0,
+                        help="Server rental cost in USD/hour (e.g. 0.23 for Vast.ai RTX 4090). "
+                             "Enables cost_per_book and cost_per_corpus columns.")
     parser.add_argument("--include-failed", action="store_true",
                         help="Include previously failed models (phi4-mini, qwen3:4b)")
     parser.add_argument("--ensemble", action="store_true",
@@ -1707,6 +1814,9 @@ def main():
                         help="Tag for results file")
 
     args = parser.parse_args()
+
+    global COST_PER_HOUR_USD
+    COST_PER_HOUR_USD = args.cost_per_hour
 
     if args.all:
         args.group = ["A", "B", "C"]
@@ -1734,12 +1844,8 @@ def main():
     print(f"Cases: {len(cases)} ({', '.join(c.id for c in cases)})")
     print(f"Groups: {', '.join(sorted(set(m.group for m in models)))}")
 
-    # Check ollama
-    try:
-        ollama_api("/api/tags")
-    except Exception:
-        print("\nERROR: ollama is not running. Start with: ollama serve")
-        sys.exit(1)
+    # Ensure ollama is running (start it if needed)
+    ensure_ollama_running()
 
     # Baseline VRAM snapshot
     vram_baseline = get_vram_baseline() or 0
