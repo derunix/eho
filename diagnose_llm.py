@@ -1781,6 +1781,20 @@ def save_results(results: list[ModelResult], vram_baseline: float, tag: str = ""
     return path
 
 
+def apply_all_flag_defaults(args) -> None:
+    """Разворачивает --all, не затирая явно запрошенную группу моделей."""
+    if not getattr(args, "all", False):
+        return
+
+    if getattr(args, "group", None) == ["A", "B"]:
+        args.group = ["A", "B", "C"]
+    args.include_failed = True
+    args.ensemble = True
+    args.kv_cache_test = True
+    args.context_test = True
+    args.loq_test = True
+
+
 # ──────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────
@@ -1803,7 +1817,7 @@ def main():
     parser.add_argument("--kv-cache-test", action="store_true",
                         help="Test flash attention + KV cache quantization")
     parser.add_argument("--context-test", action="store_true",
-                        help="Test num_ctx (2048/4096/8192)")
+                        help="Test num_ctx (2048/4096/8192/16384)")
     parser.add_argument("--loq-test", action="store_true",
                         help="Test LOQ thermal profile (Balance vs Performance)")
     parser.add_argument("--all", action="store_true",
@@ -1818,13 +1832,7 @@ def main():
     global COST_PER_HOUR_USD
     COST_PER_HOUR_USD = args.cost_per_hour
 
-    if args.all:
-        args.group = ["A", "B", "C"]
-        args.include_failed = True
-        args.ensemble = True
-        args.kv_cache_test = True
-        args.context_test = True
-        args.loq_test = True
+    apply_all_flag_defaults(args)
 
     models = get_models(args.group, args.include_failed, args.models)
     if not models:

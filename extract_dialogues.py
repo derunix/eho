@@ -316,6 +316,97 @@ class Config:
     )
 
 
+PIPELINE_LLM_PRESETS: dict[str, dict[str, Any]] = {
+    "server-48gb-balanced": {
+        "description": (
+            "Серверный mixed-профиль по бенчмарку 2026-04-16: "
+            "быстрый primary `mistral:7b`, большой conservative secondary/arbiter `gemma4:26b`."
+        ),
+        "overrides": {
+            "model": "mistral:7b",
+            "knowledge_extract_model": "mistral:7b",
+            "knowledge_extract_model_secondary": "gemma4:26b",
+            "knowledge_arbiter_model": "gemma4:26b",
+            "knowledge_validate_model": "gemma4:26b",
+            "knowledge_link_model": "gemma4:26b",
+            "knowledge_dual_extraction": True,
+            "request_timeout": 300,
+        },
+    },
+    "server-48gb-quality": {
+        "description": (
+            "Серверный quality-профиль для мощных GPU: "
+            "primary `gemma4:26b`, крупное второе мнение `qwen3-coder:30b`, "
+            "арбитраж и валидация на `gemma4:26b`."
+        ),
+        "overrides": {
+            "model": "gemma4:26b",
+            "knowledge_extract_model": "gemma4:26b",
+            "knowledge_extract_model_secondary": "qwen3-coder:30b",
+            "knowledge_arbiter_model": "gemma4:26b",
+            "knowledge_validate_model": "gemma4:26b",
+            "knowledge_link_model": "gemma4:26b",
+            "knowledge_dual_extraction": True,
+            "request_timeout": 360,
+        },
+    },
+}
+
+
+def cli_option_was_provided(argv_tokens: list[str], option_name: str) -> bool:
+    """Проверяет, был ли конкретный CLI-флаг задан явно."""
+    return any(token == option_name or token.startswith(f"{option_name}=") for token in argv_tokens)
+
+
+def apply_llm_preset_to_args(args: Any, argv_tokens: list[str]) -> Optional[dict[str, Any]]:
+    """Подставляет preset-значения только для тех опций, которые не заданы явно."""
+    preset_name = strip_text(getattr(args, "llm_preset", "")).lower()
+    if not preset_name:
+        return None
+
+    preset = PIPELINE_LLM_PRESETS.get(preset_name)
+    if preset is None:
+        raise ValueError(f"Unknown llm preset: {preset_name}")
+
+    flag_map = {
+        "model": ["--model"],
+        "knowledge_extract_model": ["--knowledge-extract-model", "--primary-model"],
+        "knowledge_extract_model_secondary": ["--knowledge-extract-model-secondary", "--secondary-model"],
+        "knowledge_arbiter_model": ["--knowledge-arbiter-model", "--arbiter-model"],
+        "knowledge_validate_model": ["--knowledge-validate-model", "--validator-model"],
+        "knowledge_link_model": ["--knowledge-link-model", "--linker-model"],
+        "request_timeout": ["--request-timeout"],
+    }
+
+    for attr_name, value in preset.get("overrides", {}).items():
+        if attr_name == "knowledge_dual_extraction":
+            dual_flags = (
+                cli_option_was_provided(argv_tokens, "--knowledge-dual-extraction")
+                or cli_option_was_provided(argv_tokens, "--no-knowledge-dual-extraction")
+            )
+            if not dual_flags:
+                setattr(args, "knowledge_dual_extraction", value)
+            continue
+
+        option_names = flag_map.get(attr_name, [])
+        if any(cli_option_was_provided(argv_tokens, option_name) for option_name in option_names):
+            continue
+        setattr(args, attr_name, value)
+
+    return preset
+
+
+def sync_primary_model_alias_to_base_model(args: Any, argv_tokens: list[str]) -> None:
+    """Если задан только primary-model, делаем его и базовой моделью пайплайна."""
+    primary_was_provided = (
+        cli_option_was_provided(argv_tokens, "--knowledge-extract-model")
+        or cli_option_was_provided(argv_tokens, "--primary-model")
+    )
+    model_was_provided = cli_option_was_provided(argv_tokens, "--model")
+    if primary_was_provided and not model_was_provided and strip_text(getattr(args, "knowledge_extract_model", "")):
+        args.model = strip_text(args.knowledge_extract_model)
+
+
 # ──────────────────────────────────────────────
 # Шаг 0: Утилиты
 # ──────────────────────────────────────────────
@@ -2538,6 +2629,31 @@ def get_model_for_role(config: Config, role: str) -> str:
         "knowledge_arbiter": strip_text(getattr(config, "knowledge_arbiter_model", "")),
     }
     return role_map.get(role, "") or config.model
+
+
+def collect_required_ollama_models(config: Config) -> list[str]:
+    """Собирает все модели, которые реально понадобятся в текущем запуске."""
+    candidates = [
+        strip_text(config.model),
+        get_model_for_role(config, "knowledge_extract"),
+    ]
+    if getattr(config, "knowledge_dual_extraction_enabled", False):
+        candidates.append(get_model_for_role(config, "knowledge_extract_secondary"))
+        candidates.append(get_model_for_role(config, "knowledge_arbiter"))
+    if getattr(config, "knowledge_llm_validation_enabled", False):
+        candidates.append(get_model_for_role(config, "knowledge_validate"))
+    if getattr(config, "knowledge_linking_enabled", False):
+        candidates.append(get_model_for_role(config, "knowledge_link"))
+
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for model_name in candidates:
+        normalized = normalize_dedup_text(model_name)
+        if not model_name or normalized in seen:
+            continue
+        seen.add(normalized)
+        resolved.append(model_name)
+    return resolved
 
 
 # ──────────────────────────────────────────────
@@ -8593,12 +8709,29 @@ def find_ollama_binary() -> Optional[str]:
     return None
 
 
-def ensure_ollama(model: str) -> Optional[subprocess.Popen]:
+def ensure_ollama(models: Any) -> Optional[subprocess.Popen]:
     """
-    Убеждается, что ollama запущена и модель загружена.
+    Убеждается, что ollama запущена и нужные модели загружены.
     Возвращает процесс ollama serve (если мы его запустили) или None.
     """
     started_process = None
+    if isinstance(models, str):
+        required_models = [models]
+    else:
+        required_models = [strip_text(model_name) for model_name in (models or []) if strip_text(model_name)]
+
+    deduped_models: list[str] = []
+    seen_models: set[str] = set()
+    for model_name in required_models:
+        normalized = normalize_dedup_text(model_name)
+        if not model_name or normalized in seen_models:
+            continue
+        seen_models.add(normalized)
+        deduped_models.append(model_name)
+
+    if not deduped_models:
+        print("Не указаны модели для проверки ollama.")
+        exit(1)
 
     # 1. Проверяем, запущена ли ollama
     if is_ollama_running():
@@ -8634,16 +8767,18 @@ def ensure_ollama(model: str) -> Optional[subprocess.Popen]:
             print("  Таймаут ожидания ollama serve (30 сек)")
             exit(1)
 
-    # 2. Проверяем / скачиваем модель
-    print(f"Проверяю модель {model}...")
+    # 2. Проверяем / скачиваем модели
+    print(f"Проверяю модели: {', '.join(deduped_models)}")
     try:
-        result = subprocess.run(
-            ["ollama", "show", model],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode == 0:
-            print(f"  Модель {model} найдена")
-        else:
+        for model in deduped_models:
+            result = subprocess.run(
+                ["ollama", "show", model],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                print(f"  Модель {model} найдена")
+                continue
+
             print(f"  Модель {model} не найдена, скачиваю...")
             pull = subprocess.run(
                 ["ollama", "pull", model],
@@ -8657,7 +8792,7 @@ def ensure_ollama(model: str) -> Optional[subprocess.Popen]:
         print("  Команда ollama не найдена")
         exit(1)
     except subprocess.TimeoutExpired:
-        print("  Таймаут при работе с моделью")
+        print("  Таймаут при работе с моделями")
         exit(1)
 
     return started_process
@@ -8696,6 +8831,8 @@ def main() -> int:
     parser.add_argument("--books-dir", default="./books", help="Папка с .fb2/.txt книгами")
     parser.add_argument("--output-dir", default="./output", help="Папка для результатов")
     parser.add_argument("--api-base", default="http://localhost:11434/v1", help="URL API модели")
+    parser.add_argument("--llm-preset", choices=sorted(PIPELINE_LLM_PRESETS),
+                        default="", help="Готовый стек моделей для конкретного железа/режима")
     parser.add_argument("--model", default="gemma4:e2b", help="Название модели")
     parser.add_argument("--chunk-size", type=int, default=Config.chunk_size, help="Размер фрагмента в токенах")
     parser.add_argument("--no-auto-serve", action="store_true",
@@ -8712,19 +8849,20 @@ def main() -> int:
                         help="Чем извлекать голос Макса: быстрым regex или LLM (по умолчанию regex)")
     parser.add_argument("--knowledge-protocol", choices=("lines", "json"), default="lines",
                         help="Формат ответа модели для extraction знаний: lines или json")
-    parser.add_argument("--knowledge-extract-model", default="",
-                        help="Отдельная модель для extraction фактов о мире")
+    parser.add_argument("--knowledge-extract-model", "--primary-model", dest="knowledge_extract_model", default="",
+                        help="Отдельная primary-модель для extraction фактов о мире")
     parser.add_argument("--knowledge-dual-extraction", dest="knowledge_dual_extraction", action="store_true", default=None,
                         help="На подозрительных чанках запускать вторую extractor-модель и арбитра")
     parser.add_argument("--no-knowledge-dual-extraction", dest="knowledge_dual_extraction", action="store_false",
                         help="Disable dual extraction and arbiter for knowledge extraction")
-    parser.add_argument("--knowledge-extract-model-secondary", default=Config.knowledge_extract_model_secondary,
+    parser.add_argument("--knowledge-extract-model-secondary", "--secondary-model",
+                        dest="knowledge_extract_model_secondary", default=Config.knowledge_extract_model_secondary,
                         help="Вторая модель для fallback extraction фактов на подозрительных чанках")
-    parser.add_argument("--knowledge-arbiter-model", default="",
+    parser.add_argument("--knowledge-arbiter-model", "--arbiter-model", dest="knowledge_arbiter_model", default="",
                         help="Модель-арбитр для сравнения кандидатов от двух extractor-моделей")
-    parser.add_argument("--knowledge-validate-model", default="",
+    parser.add_argument("--knowledge-validate-model", "--validator-model", dest="knowledge_validate_model", default="",
                         help="Отдельная модель для LLM-валидации автономности фактов")
-    parser.add_argument("--knowledge-link-model", default="",
+    parser.add_argument("--knowledge-link-model", "--linker-model", dest="knowledge_link_model", default="",
                         help="Отдельная модель для linking и дедупликации фактов")
     parser.add_argument("--no-llm-knowledge-validation", action="store_true",
                         help="Отключить второй LLM-этап валидации автономности фактов")
@@ -8732,13 +8870,18 @@ def main() -> int:
                         help="Таймаут одного запроса к модели в секундах (по умолчанию 180)")
     parser.add_argument("--seed", type=int, default=42,
                         help="Seed для воспроизводимости (по умолчанию 42)")
+    argv_tokens = sys.argv[1:]
     args = parser.parse_args()
+    applied_preset = apply_llm_preset_to_args(args, argv_tokens)
+    sync_primary_model_alias_to_base_model(args, argv_tokens)
     _STOP_REQUESTED.clear()
 
     # Воспроизводимый random
     random.seed(args.seed)
     print(f"Random seed: {args.seed}")
     print(f"Voice extractor: {args.voice_extractor}")
+    if applied_preset:
+        print(f"LLM preset: {args.llm_preset} — {applied_preset['description']}")
 
     config = Config(
         books_dir=args.books_dir,
@@ -8759,6 +8902,16 @@ def main() -> int:
     config.knowledge_validate_model = args.knowledge_validate_model
     config.knowledge_link_model = args.knowledge_link_model
     config.knowledge_llm_validation_enabled = not args.no_llm_knowledge_validation
+    required_models = collect_required_ollama_models(config)
+    print(
+        "Resolved model stack: "
+        f"base={config.model}; "
+        f"knowledge_extract={get_model_for_role(config, 'knowledge_extract')}; "
+        f"secondary={get_model_for_role(config, 'knowledge_extract_secondary') if config.knowledge_dual_extraction_enabled else '-'}; "
+        f"arbiter={get_model_for_role(config, 'knowledge_arbiter') if config.knowledge_dual_extraction_enabled else '-'}; "
+        f"validate={get_model_for_role(config, 'knowledge_validate') if config.knowledge_llm_validation_enabled else '-'}; "
+        f"link={get_model_for_role(config, 'knowledge_link') if config.knowledge_linking_enabled else '-'}"
+    )
 
     # Создаём папку для результатов
     Path(config.output_dir).mkdir(parents=True, exist_ok=True)
@@ -8773,6 +8926,7 @@ def main() -> int:
         "run_started_at": now_iso_str(),
         "updated_at": now_iso_str(),
         "seed": args.seed,
+        "llm_preset": args.llm_preset or None,
         "model": config.model,
         "knowledge_extraction_protocol": config.knowledge_extraction_protocol,
         "knowledge_extract_model": config.knowledge_extract_model or config.model,
@@ -8787,6 +8941,7 @@ def main() -> int:
         "workers": args.workers,
         "voice_extractor": args.voice_extractor,
         "request_timeout": config.request_timeout,
+        "required_models": required_models,
         "llm_trace_enabled": config.llm_trace_enabled,
         "llm_trace_run_id": config.llm_trace_run_id,
         "extraction_passes": config.extraction_passes,
@@ -8864,7 +9019,7 @@ def main() -> int:
 
     try:
         if not args.no_auto_serve:
-            ollama_process = ensure_ollama(config.model)
+            ollama_process = ensure_ollama(required_models)
 
         # Инициализация клиента
         if _openai_import_error is not None:

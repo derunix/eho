@@ -447,6 +447,42 @@ python extract_dialogues.py
 python extract_dialogues.py --workers 2 --voice-extractor regex --chunk-size 2500
 ```
 
+Серверный preset для 48 GB GPU с лучшим балансом скорость/качество по бенчмарку `2026-04-16`:
+
+```bash
+python extract_dialogues.py --llm-preset server-48gb-balanced --workers 1
+```
+
+Серверный preset для мощной видеокарты с упором на большие модели и quality:
+
+```bash
+python extract_dialogues.py --llm-preset server-48gb-quality --workers 1
+```
+
+Любой preset можно точечно переопределить явными флагами, например:
+
+```bash
+python extract_dialogues.py --llm-preset server-48gb-balanced --knowledge-validate-model gemma4:31b
+```
+
+Короткие CLI-алиасы для knowledge-ролей тоже поддерживаются:
+- `--primary-model` = `--knowledge-extract-model`
+- `--secondary-model` = `--knowledge-extract-model-secondary`
+- `--arbiter-model` = `--knowledge-arbiter-model`
+- `--validator-model` = `--knowledge-validate-model`
+
+Пример ручной server-конфигурации без preset:
+
+```bash
+python extract_dialogues.py \
+  --primary-model gemma4:26b \
+  --secondary-model gemma4:31b \
+  --arbiter-model gemma4:26b \
+  --validator-model gemma4:26b \
+  --workers 1 \
+  --no-resume
+```
+
 Если не нужен автозапуск `ollama serve`:
 
 ```bash
@@ -480,6 +516,10 @@ python extract_dialogues.py --no-resume
 ## Почему используются именно такие модели
 
 Текущий default stack не взят “по бенчмарку на бумаге”, а по реальным прогонам на книгах Макса Фрая.
+
+Сейчас в проекте есть два уровня конфигурации:
+- локальный default для бытового железа;
+- серверные presets для 48 GB GPU и больших моделей.
 
 ### Primary extractor: `gemma4`
 
@@ -557,6 +597,35 @@ python extract_dialogues.py --no-resume
 - line-protocol;
 - rule-based + LLM validation;
 - explicit arbiter на спорных фактах.
+
+## Серверные presets после бенчмарка 2026-04-16
+
+Для мощных GPU в `extract_dialogues.py` добавлены готовые presets.
+
+### `server-48gb-balanced`
+
+Использует:
+- base / primary: `mistral:7b`
+- secondary extractor: `gemma4:26b`
+- arbiter / validator / linker: `gemma4:26b`
+
+Зачем:
+- это практический mixed-stack из свежего бенчмарка;
+- `mistral:7b` дал лучший Quality×Speed;
+- `gemma4:26b` дал лучший quality среди реально полезных single-model конфигураций;
+- selective ensemble даёт более сильный recall без полного перехода на медленный large-model-only режим.
+
+### `server-48gb-quality`
+
+Использует:
+- base / primary: `gemma4:26b`
+- secondary extractor: `qwen3-coder:30b`
+- arbiter / validator / linker: `gemma4:26b`
+
+Зачем:
+- режим для мощной карты, где можно позволить себе large-model second opinion;
+- `gemma4:26b` остаётся главным quality-anchor;
+- `qwen3-coder:30b` добавляет ещё одно сильное мнение на сложных чанках.
 
 Это не “самый быстрый” путь, но это лучший из найденных локально компромиссов между:
 - качеством фактов;

@@ -27,6 +27,101 @@ class LLMExtractionPipelineSmokeTest(unittest.TestCase):
     def setUp(self):
         ed._STOP_REQUESTED.clear()
 
+    def test_apply_llm_preset_populates_server_balanced_stack(self):
+        args = types.SimpleNamespace(
+            llm_preset="server-48gb-balanced",
+            model="gemma4:e2b",
+            knowledge_extract_model="",
+            knowledge_dual_extraction=None,
+            knowledge_extract_model_secondary="qwen3:8b",
+            knowledge_arbiter_model="",
+            knowledge_validate_model="",
+            knowledge_link_model="",
+            request_timeout=180,
+        )
+
+        preset = ed.apply_llm_preset_to_args(args, [])
+
+        self.assertIsNotNone(preset)
+        self.assertEqual(args.model, "mistral:7b")
+        self.assertEqual(args.knowledge_extract_model, "mistral:7b")
+        self.assertEqual(args.knowledge_extract_model_secondary, "gemma4:26b")
+        self.assertEqual(args.knowledge_arbiter_model, "gemma4:26b")
+        self.assertEqual(args.knowledge_validate_model, "gemma4:26b")
+        self.assertEqual(args.knowledge_link_model, "gemma4:26b")
+        self.assertTrue(args.knowledge_dual_extraction)
+        self.assertEqual(args.request_timeout, 300)
+
+    def test_apply_llm_preset_respects_explicit_cli_overrides(self):
+        args = types.SimpleNamespace(
+            llm_preset="server-48gb-balanced",
+            model="custom-model",
+            knowledge_extract_model="",
+            knowledge_dual_extraction=False,
+            knowledge_extract_model_secondary="custom-secondary",
+            knowledge_arbiter_model="",
+            knowledge_validate_model="custom-validator",
+            knowledge_link_model="",
+            request_timeout=180,
+        )
+
+        ed.apply_llm_preset_to_args(
+            args,
+            [
+                "--model", "custom-model",
+                "--secondary-model", "custom-secondary",
+                "--validator-model=custom-validator",
+                "--no-knowledge-dual-extraction",
+            ],
+        )
+
+        self.assertEqual(args.model, "custom-model")
+        self.assertEqual(args.knowledge_extract_model_secondary, "custom-secondary")
+        self.assertEqual(args.knowledge_validate_model, "custom-validator")
+        self.assertFalse(args.knowledge_dual_extraction)
+        self.assertEqual(args.knowledge_extract_model, "mistral:7b")
+
+    def test_primary_model_alias_syncs_base_model_when_model_not_explicit(self):
+        args = types.SimpleNamespace(
+            model="gemma4:e2b",
+            knowledge_extract_model="gemma4:26b",
+        )
+
+        ed.sync_primary_model_alias_to_base_model(
+            args,
+            ["--primary-model", "gemma4:26b"],
+        )
+
+        self.assertEqual(args.model, "gemma4:26b")
+
+    def test_primary_model_alias_does_not_override_explicit_base_model(self):
+        args = types.SimpleNamespace(
+            model="mistral:7b",
+            knowledge_extract_model="gemma4:26b",
+        )
+
+        ed.sync_primary_model_alias_to_base_model(
+            args,
+            ["--model", "mistral:7b", "--primary-model", "gemma4:26b"],
+        )
+
+        self.assertEqual(args.model, "mistral:7b")
+
+    def test_collect_required_ollama_models_deduplicates_role_models(self):
+        config = ed.Config(model="mistral:7b")
+        config.knowledge_extract_model = "mistral:7b"
+        config.knowledge_dual_extraction_enabled = True
+        config.knowledge_extract_model_secondary = "gemma4:26b"
+        config.knowledge_arbiter_model = "gemma4:26b"
+        config.knowledge_llm_validation_enabled = True
+        config.knowledge_validate_model = "gemma4:26b"
+        config.knowledge_linking_enabled = True
+        config.knowledge_link_model = "gemma4:26b"
+
+        models = ed.collect_required_ollama_models(config)
+
+        self.assertEqual(models, ["mistral:7b", "gemma4:26b"])
+
     def test_parse_knowledge_line_protocol_accepts_category_as_field_name(self):
         response = (
             "character=Кимпа | fact=Кимпа служит дворецким дома Джуффина. | time_scope=timeless\n"
