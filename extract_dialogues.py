@@ -8723,8 +8723,12 @@ def main() -> int:
                         help="max-num-seqs для vllm — макс. одновременных запросов "
                              "(по умолчанию 16; RTX 5070 11.9 GB: 7B Q4 ~5 GB веса → ~6 GB KV)")
     parser.add_argument("--vllm-extra-args", default="",
-                        help="Дополнительные аргументы для vllm через пробел, "
-                             "например: '--dtype bfloat16 --max-model-len 32768'")
+                        help="Дополнительные аргументы для vllm через пробел. "
+                             "ВАЖНО: для GPU с <16 GB VRAM используй квантованную модель "
+                             "(*-AWQ или *-GPTQ-Int4) и добавляй "
+                             "'--dtype float16 --quantization awq' или "
+                             "'--dtype float16 --quantization gptq --max-model-len 16384'. "
+                             "7B bfloat16 требует ~14 GB — не влезет в RTX 5070.")
 
     args = parser.parse_args()
     _STOP_REQUESTED.clear()
@@ -8887,6 +8891,18 @@ def main() -> int:
         if _use_vllm:
             vllm_model = args.vllm_model or args.model
             vllm_extra = args.vllm_extra_args.split() if args.vllm_extra_args else []
+            # Предупреждение: полноточные модели не влезают на маленькие GPU
+            _is_quantized = any(
+                q in vllm_model.lower() or q in " ".join(vllm_extra).lower()
+                for q in ("awq", "gptq", "gguf", "int4", "int8", "fp8", "w4a16", "quantization")
+            )
+            if not _is_quantized and args.vllm_gpu_util <= 0.92:
+                print(
+                    f"[WARNING] Модель {vllm_model!r} похожа на полноточную (bf16/fp16). "
+                    "7B = ~14 GB, 14B = ~28 GB. На GPU с <16 GB VRAM используй квантованную версию:\n"
+                    f"  --vllm-model {vllm_model}-AWQ "
+                    "--vllm-extra-args '--dtype float16 --quantization awq --max-model-len 16384'"
+                )
             _server_process = ensure_vllm(
                 model=vllm_model,
                 port=args.vllm_port,
