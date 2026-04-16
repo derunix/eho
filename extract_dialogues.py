@@ -8925,20 +8925,9 @@ def main() -> int:
                 max_num_seqs=args.vllm_max_seqs,
                 extra_args=vllm_extra,
             )
-            # Имя модели для API-вызовов = то что vllm знает как "model"
-            # vllm отдаёт имя модели через /v1/models; берём первое
-            try:
-                req = urllib.request.Request(
-                    f"http://localhost:{args.vllm_port}/v1/models", method="GET"
-                )
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    models_data = json.loads(resp.read())
-                    served_model = models_data["data"][0]["id"]
-                    if config.model != served_model:
-                        print(f"  vllm отдаёт модель: {served_model!r} (используем её для запросов)")
-                        config.model = served_model
-            except Exception:
-                pass
+            # Мы сами запустили vllm с этой моделью — просто берём имя напрямую
+            config.model = vllm_model
+            print(f"  Модель для запросов: {config.model}")
         elif not args.no_auto_serve:
             _server_process = ensure_ollama(config.model)
 
